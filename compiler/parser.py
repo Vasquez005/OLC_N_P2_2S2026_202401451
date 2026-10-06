@@ -21,7 +21,14 @@ class Parser:
     tokens = Lexer.tokens
  
     # Precedencia de operadores
-    precedence = ()
+    precedence = (
+        ('left', 'OR'),
+        ('left', 'AND'),
+        ('nonassoc', 'EQ', 'NE', 'LT', 'GT', 'LE', 'GE'),
+        ('left', 'PLUS', 'MINUS'),
+        ('left', 'TIMES', 'DIVIDE', 'MOD'),
+        ('right', 'NOT', 'UMINUS'),
+    )
 
     def __init__(self, errores=None, debug=False):
         self.errores = errores if errores is not None else ErrorList()
@@ -132,7 +139,39 @@ class Parser:
 
     # --- Expresiones (operadores en el paso 2) -------------------------
  
-    def p_expresion(self, p):
+
+    def p_expresion_binaria(self, p):
+        '''expresion : expresion OR expresion
+                     | expresion AND expresion
+                     | expresion EQ expresion
+                     | expresion NE expresion
+                     | expresion LT expresion
+                     | expresion GT expresion
+                     | expresion LE expresion
+                     | expresion GE expresion
+                     | expresion PLUS expresion
+                     | expresion MINUS expresion
+                     | expresion TIMES expresion
+                     | expresion DIVIDE expresion
+                     | expresion MOD expresion'''
+        linea, col = self._pos(p, 2)
+        p[0] = ast.BinaryOp(p[2], p[1], p[3], linea, col)
+
+    def p_expresion_not(self, p):
+        'expresion : NOT expresion'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.UnaryOp('!', p[2], linea, col)
+ 
+    def p_expresion_uminus(self, p):
+        'expresion : MINUS expresion %prec UMINUS'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.UnaryOp('-', p[2], linea, col)
+ 
+    def p_expresion_agrupada(self, p):
+        'expresion : LPAREN expresion RPAREN'
+        p[0] = p[2]     # los paréntesis no generan nodo: solo agrupan
+ 
+    def p_expresion_primario(self, p):
         'expresion : primario'
         p[0] = p[1]
  

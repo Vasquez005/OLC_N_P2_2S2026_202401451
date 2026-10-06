@@ -91,3 +91,21 @@ class Identifier(Node):
     def __init__(self, nombre, linea, columna):
         super().__init__(linea, columna)
         self.nombre = nombre
+
+class BinaryOp(Node):
+    """Operación binaria: +, -, *, /, %, &&, ||, ==, !=, <, >, <=, >=."""
+
+    def __init__(self, op, izquierda, derecha, linea, columna):
+        super().__init__(linea, columna)
+        self.op = op                # str
+        self.izquierda = izquierda  # Node
+        self.derecha = derecha      # Node
+
+
+class UnaryOp(Node):
+    """<op> expr   (negación aritmética '-' y lógica '!')."""
+ 
+    def __init__(self, op, expr, linea, columna):
+        super().__init__(linea, columna)
+        self.op = op                # '-' o '!'
+        self.expr = expr
