@@ -40,54 +40,54 @@ class Node:
     # Estructura del programa
     # ----------------------------------------------------------------------
     
-    class Program(Node):
-        def __init__(self, funciones):
-            super().__init__(1, 1)
-            self.funciones = funciones      # list[Function]
+class Program(Node):
+    def __init__(self, funciones):
+        super().__init__(1, 1)
+        self.funciones = funciones      # list[Function]
 
-    class Function(Node):
-        def __init__(self, nombre, params, tipo_retorno, cuerpo, linea, columna):
-            super().__init__(linea, columna)
-            self.nombre = nombre
-            self.params = params            # list[Param] PENDIENTE
-            self.tipo_retorno = tipo_retorno  # str o None si no retorna
-            self.cuerpo = cuerpo            # Block
+class Function(Node):
+    def __init__(self, nombre, params, tipo_retorno, cuerpo, linea, columna):
+        super().__init__(linea, columna)
+        self.nombre = nombre
+        self.params = params            # list[Param] PENDIENTE
+        self.tipo_retorno = tipo_retorno  # str o None si no retorna
+        self.cuerpo = cuerpo            # Block
 
-    class Block(Node):
-        def __init__(self, instrucciones, linea, columna):
-            super().__init__(linea, columna)
-            self.instrucciones = instrucciones   # list[Node]
+class Block(Node):
+    def __init__(self, instrucciones, linea, columna):
+        super().__init__(linea, columna)
+        self.instrucciones = instrucciones   # list[Node]
 
     # ----------------------------------------------------------------------
     # Instrucciones
     # ----------------------------------------------------------------------
     
-    class VarDecl(Node):
-        """let [mut] id [: tipo] [= expresion];"""
+class VarDecl(Node):
+    """let [mut] id [: tipo] [= expresion];"""
     
-        def __init__(self, nombre, mutable, tipo, valor, linea, columna):
-            super().__init__(linea, columna)
-            self.nombre = nombre
-            self.mutable = mutable      # bool
-            self.tipo = tipo            # str ('i32', 'f64', ...) o None (inferido)
-            self.valor = valor          # Node o None (sin inicializar)
+    def __init__(self, nombre, mutable, tipo, valor, linea, columna):
+        super().__init__(linea, columna)
+        self.nombre = nombre
+        self.mutable = mutable      # bool
+        self.tipo = tipo            # str ('i32', 'f64', ...) o None (inferido)
+        self.valor = valor          # Node o None (sin inicializar)
 
     # ----------------------------------------------------------------------
     # Expresiones
     # ----------------------------------------------------------------------
     
-    class Literal(Node):
-        """Valor constante: 10, 3.14, true, 'a', "hola", String::from("hola")."""
+class Literal(Node):
+    """Valor constante: 10, 3.14, true, 'a', "hola", String::from("hola")."""
     
-        def __init__(self, valor, tipo, linea, columna):
-            super().__init__(linea, columna)
-            self.valor = valor
-            self.tipo = tipo            # 'i32', 'f64', 'bool', 'char', 'String'
+    def __init__(self, valor, tipo, linea, columna):
+        super().__init__(linea, columna)
+        self.valor = valor
+        self.tipo = tipo            # 'i32', 'f64', 'bool', 'char', 'String'
     
     
-    class Identifier(Node):
-        """Uso de una variable dentro de una expresión."""
-    
-        def __init__(self, nombre, linea, columna):
-            super().__init__(linea, columna)
-            self.nombre = nombre
+class Identifier(Node):
+    """Uso de una variable dentro de una expresión."""
+
+    def __init__(self, nombre, linea, columna):
+        super().__init__(linea, columna)
+        self.nombre = nombre
