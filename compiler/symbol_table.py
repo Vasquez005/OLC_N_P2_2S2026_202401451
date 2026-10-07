@@ -156,8 +156,7 @@ class SymbolTable:
 
         Sombreado (shadowing): si ya existe una variable con ese nombre en
         el mismo ámbito, la nueva la reemplaza en el diccionario, pero
-        recibe su PROPIO espacio en la pila (puede ser de otro tipo). La
-        anterior sigue en `todos` para que aparezca en el reporte
+        recibe su PROPIO espacio en la pila (puede ser de otro tipo). 
         """
         sym = Symbol(nombre, categoria, tipo, linea, columna,
                      self.actual.nombre, mutable, valor)
