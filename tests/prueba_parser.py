@@ -1,5 +1,9 @@
 """
-Prueba del parser.
+Prueba del parser. Ejecutar desde la raíz del proyecto:
+    python -m tests.prueba_parser                        # usa tests/01_variables.rs
+    python -m tests.prueba_parser tests/04_control.rs
+    python -m tests.prueba_parser tests/04_control.rs --arbol   # árbol completo
+    python -m tests.prueba_parser tests/04_control.rs --debug   # conflictos
 """
 import sys
 
@@ -17,11 +21,62 @@ def infijo(n):
     if isinstance(n, ast.UnaryOp):
         return f"({n.op}{infijo(n.expr)})"
     if isinstance(n, ast.Literal):
-        return repr(n.valor) if n.tipo in ('String', 'char') else str(n.valor).lower() \
-            if n.tipo == 'bool' else str(n.valor)
+        if n.tipo in ('String', 'char'):
+            return repr(n.valor)
+        if n.tipo == 'bool':
+            return str(n.valor).lower()
+        return str(n.valor)
     if isinstance(n, ast.Identifier):
         return n.nombre
     return type(n).__name__
+
+
+def etiqueta(e):
+    return f"'{e}: " if e else ''
+
+
+def mostrar(ins, nivel=1):
+    """Imprime una instrucción (y sus bloques internos) con sangría."""
+    s = '  ' * nivel
+    pos = f"L{ins.linea:<3}"
+
+    if isinstance(ins, ast.VarDecl):
+        mut = 'mut ' if ins.mutable else ''
+        tipo = f": {ins.tipo}" if ins.tipo else ''
+        print(f"{pos}{s}let {mut}{ins.nombre}{tipo} = {infijo(ins.valor)}")
+    elif isinstance(ins, ast.Assignment):
+        print(f"{pos}{s}{infijo(ins.objetivo)} {ins.op} {infijo(ins.valor)}")
+    elif isinstance(ins, ast.Print):
+        args = ', '.join(infijo(a) for a in ins.args)
+        print(f"{pos}{s}println partes={ins.partes} args=[{args}]")
+    elif isinstance(ins, ast.If):
+        print(f"{pos}{s}if {infijo(ins.condicion)}")
+        mostrar_bloque(ins.entonces, nivel + 1)
+        if isinstance(ins.sino, ast.If):
+            print(f"{'':4}{s}else ->")
+            mostrar(ins.sino, nivel + 1)
+        elif ins.sino is not None:
+            print(f"{'':4}{s}else")
+            mostrar_bloque(ins.sino, nivel + 1)
+    elif isinstance(ins, ast.While):
+        print(f"{pos}{s}{etiqueta(ins.etiqueta)}while {infijo(ins.condicion)}")
+        mostrar_bloque(ins.cuerpo, nivel + 1)
+    elif isinstance(ins, ast.Loop):
+        print(f"{pos}{s}{etiqueta(ins.etiqueta)}loop")
+        mostrar_bloque(ins.cuerpo, nivel + 1)
+    elif isinstance(ins, (ast.Break, ast.Continue)):
+        nombre = 'break' if isinstance(ins, ast.Break) else 'continue'
+        et = f" '{ins.etiqueta}" if ins.etiqueta else ''
+        print(f"{pos}{s}{nombre}{et}")
+    else:
+        print(f"{pos}{s}{type(ins).__name__}")
+
+
+def mostrar_bloque(bloque, nivel):
+    if not bloque.instrucciones:
+        print(f"{'':4}{'  ' * nivel}(bloque vacío)")
+    for ins in bloque.instrucciones:
+        mostrar(ins, nivel)
 
 
 def main():
@@ -40,16 +95,7 @@ def main():
         else:
             for fn in arbol.funciones:
                 print(f"fn {fn.nombre}:")
-                for ins in fn.cuerpo.instrucciones:
-                    if isinstance(ins, ast.VarDecl):
-                        mut = 'mut ' if ins.mutable else ''
-                        tipo = f": {ins.tipo}" if ins.tipo else ''
-                        print(f"  L{ins.linea:<3} let {mut}{ins.nombre}{tipo} = {infijo(ins.valor)}")
-                    elif isinstance(ins, ast.Assignment):
-                        print(f"  L{ins.linea:<3} {infijo(ins.objetivo)} {ins.op} {infijo(ins.valor)}")
-                    elif isinstance(ins, ast.Print):
-                        args = ', '.join(infijo(a) for a in ins.args)
-                        print(f"  L{ins.linea:<3} println partes={ins.partes} args=[{args}]")
+                mostrar_bloque(fn.cuerpo, 1)
 
     print("\n--- Errores ---" if errores.hay_errores() else "\nSin errores.")
     for e in errores:

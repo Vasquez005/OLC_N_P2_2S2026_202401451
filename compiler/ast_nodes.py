@@ -104,7 +104,39 @@ class Print(Node):
  
     def num_marcadores(self):
         return sum(1 for p in self.partes if p is None)
+
+class If(Node):
+    """if cond { ... } [else { ... } | else if ...]"""
  
+    def __init__(self, condicion, entonces, sino, linea, columna):
+        super().__init__(linea, columna)
+        self.condicion = condicion
+        self.entonces = entonces    # Block
+        self.sino = sino            # Block, If o None
+
+class While(Node):
+    def __init__(self, condicion, cuerpo, etiqueta, linea, columna):
+        super().__init__(linea, columna)
+        self.condicion = condicion
+        self.cuerpo = cuerpo        # Block
+        self.etiqueta = etiqueta    # str sin apóstrofo ('outer') o None
+
+class Loop(Node):
+    def __init__(self, cuerpo, etiqueta, linea, columna):
+        super().__init__(linea, columna)
+        self.cuerpo = cuerpo        # Block
+        self.etiqueta = etiqueta    # str o None
+
+class Break(Node):
+    def __init__(self, etiqueta, linea, columna):
+        super().__init__(linea, columna)
+        self.etiqueta = etiqueta    # None = el ciclo más interno
+
+
+class Continue(Node):
+    def __init__(self, etiqueta, linea, columna):
+        super().__init__(linea, columna)
+        self.etiqueta = etiqueta
  
 
     # ----------------------------------------------------------------------

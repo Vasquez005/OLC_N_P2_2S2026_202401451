@@ -96,17 +96,99 @@ class Parser:
 
     def p_instrucciones_lista(self, p):
         'instrucciones : instrucciones instruccion'
-        p[0] = p[1] + [p[2]]
+        p[0] = p[1] + [p[2]] if p[2] is not None else p[1]
  
     def p_instrucciones_una(self, p):
         'instrucciones : instruccion'
-        p[0] = [p[1]]
+        p[0] = [p[1]] if p[1] is not None else []
  
     def p_instruccion(self, p):
         '''instruccion : declaracion SEMI
                        | asignacion SEMI
-                       | impresion SEMI'''
+                       | impresion SEMI
+                       | sentencia_if
+                       | sentencia_while
+                       | sentencia_loop
+                       | sentencia_break SEMI
+                       | sentencia_continue SEMI'''
         p[0] = p[1]
+
+    def p_instruccion_vacia(self, p):
+        'instruccion : SEMI' # Permitimos cosas como `};` o `;;` sin generar nodos
+        p[0] = None
+
+    # --- if / else if / else ------------------------------------------
+    # No hay ambigüedad del "else colgante" porque los bloques siempre
+    # llevan llaves.
+
+    def p_sentencia_if(self, p):
+        'sentencia_if : IF expresion bloque'
+        self._revisar_condicion(p[2])
+        linea, col = self._pos(p, 1)
+        p[0] = ast.If(p[2], p[3], None, linea, col) #dejamos None como base porque puede que no haya un else, y si hay un else, se agregará en la siguiente regla de producción.
+
+    def p_sentencia_if_else(self, p):
+        '''sentencia_if : IF expresion bloque ELSE bloque
+                        | IF expresion bloque ELSE sentencia_if'''
+        self._revisar_condicion(p[2])
+        linea, col = self._pos(p, 1)
+        p[0] = ast.If(p[2], p[3], None, linea, col)
+
+    # --- while ----------------------------------------------------------
+
+    def p_sentencia_while(self, p):
+        '''sentencia_while : WHILE expresion bloque'''
+        self._revisar_condicion(p[2])
+        linea, col = self._pos(p, 1)
+        p[0] = ast.While(p[2], p[3], None, linea, col)
+
+    def p_sentencia_while_etiqueta(self, p):
+        'sentencia_while : LABEL COLON WHILE expresion bloque'
+        self._revisar_condicion(p[4]) #revisamos la expresion de la sentencia while para asegurarnos de que sea una expresión booleana válida.  
+        linea, col = self._pos(p, 1)
+        p[0] = ast.While(p[4], p[5], p[1], linea, col)
+
+    # --- loop -----------------------------------------------------------
+
+    def p_sentencia_loop(self, p):
+        'sentencia_loop : LOOP bloque'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Loop(p[2], None, linea, col) #sera None porque no hay etiqueta en esta regla de producción.
+
+    def p_sentencia_loop_etiqueta(self, p):
+        'sentencia_loop : LABEL COLON LOOP bloque'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Loop(p[4], p[1], linea, col) 
+
+    # --- break / continue --------------------------------------------
+ 
+    def p_sentencia_break(self, p):
+        '''sentencia_break : BREAK
+                           | BREAK LABEL'''
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Break(p[2] if len(p) == 3 else None, linea, col)
+ 
+    def p_sentencia_continue(self, p):
+        '''sentencia_continue : CONTINUE
+                              | CONTINUE LABEL'''
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Continue(p[2] if len(p) == 3 else None, linea, col)
+
+    # ----------------------------------------------------------------------
+    # Utilidades para revisar condiciones y formatear cadenas
+    # ----------------------------------------------------------------------
+ 
+    def _revisar_condicion(self, cond):
+        """El enunciado prohíbe paréntesis alrededor de toda la condición:
+            if (x > 5) { ... }   -> error
+            if (a) && (b) { }    -> válido (los paréntesis no la envuelven toda)
+        """
+        if getattr(cond, '_parentesis', None):
+            linea, col = cond._parentesis
+            self.errores.agregar(
+                SINTACTICO,
+                "No se permiten paréntesis alrededor de la condición.",
+                linea, col)
 
     # --- Declaración de variables ------------------------------------
     #   let [mut] id [: tipo] [= expresion]
@@ -229,6 +311,7 @@ class Parser:
     def p_expresion_agrupada(self, p):
         'expresion : LPAREN expresion RPAREN'
         p[0] = p[2]     # los paréntesis no generan nodo: solo agrupan
+        p[0]._parentesis = self._pos(p, 1) # marca que la expresión estaba entre paréntesis
  
     def p_expresion_primario(self, p):
         'expresion : primario'
