@@ -21,6 +21,8 @@ class Parser:
     tokens = Lexer.tokens
  
     # Precedencia de operadores
+    #   left     -> a - b - c  se agrupa como (a - b) - c
+    #   right    -> !!a        se agrupa como !(!a)
     precedence = (
         ('left', 'OR'),
         ('left', 'AND'),
@@ -101,7 +103,9 @@ class Parser:
         p[0] = [p[1]]
  
     def p_instruccion(self, p):
-        'instruccion : declaracion SEMI'
+        '''instruccion : declaracion SEMI
+                       | asignacion SEMI
+                       | impresion SEMI'''
         p[0] = p[1]
 
     # --- Declaración de variables ------------------------------------
@@ -126,7 +130,63 @@ class Parser:
         '''init_opt : ASSIGN expresion
                     | empty'''
         p[0] = p[2] if len(p) == 3 else None
- 
+
+    # --- Asignaciones ---------------------------------------------------
+
+    def p_asignacion(self, p):
+        '''asignacion : ID ASSIGN expresion
+                      | ID PLUS_ASSIGN expresion
+                      | ID MINUS_ASSIGN expresion
+                      | ID TIMES_ASSIGN expresion
+                      | ID DIVIDE_ASSIGN expresion
+                      | ID MOD_ASSIGN expresion'''
+        linea, col = self._pos(p, 1)
+        objetivo = ast.Identifier(p[1], linea, col)
+        p[0] = ast.Assignment(objetivo, p[2], p[3], linea, col)
+
+    # --- println! ------------------------------------------------------
+
+    def p_impresion_vacia(self, p):
+        'impresion : PRINTLN LPAREN RPAREN'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Print("", [], [], linea, col)
+
+    def p_impresion_texto(self, p):
+        'impresion : PRINTLN LPAREN STRING RPAREN'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Print(p[3], self._partes_formato(p[3]), [], linea, col)
+
+    def p_impresion_args(self, p):
+        'impresion : PRINTLN LPAREN STRING COMMA lista_expresiones RPAREN'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Print(p[3], self._partes_formato(p[3]), p[5], linea, col)
+
+    def p_lista_expresiones(self, p):
+        '''lista_expresiones : lista_expresiones COMMA expresion
+                             | expresion'''
+        p[0] = p[1] + [p[3]] if len(p) == 4 else [p[1]]
+
+    @staticmethod
+    def _partes_formato(texto):
+        """Separa el formato en textos y marcadores (None = {})."""
+        partes, actual, i = [], [], 0
+        while i < len(texto):
+            if texto.startswith('{{', i):
+                actual.append('{'); i += 2
+            elif texto.startswith('}}', i):
+                actual.append('}'); i += 2
+            elif texto.startswith('{}', i) or texto.startswith('{:?}', i):
+                if actual:
+                    partes.append(''.join(actual)); actual = []
+                partes.append(None)
+                i += 2 if texto.startswith('{}', i) else 4
+            else:
+                actual.append(texto[i]); i += 1
+        if actual:
+            partes.append(''.join(actual))
+        return partes
+
+    
     # --- Tipos (los arreglos [T; N] PENDIENTES) -----------
 
     def p_tipo(self, p):
@@ -137,9 +197,8 @@ class Parser:
                 | T_STRING'''
         p[0] = p[1]
 
-    # --- Expresiones (operadores en el paso 2) -------------------------
+    # --- Expresiones -------------------------
  
-
     def p_expresion_binaria(self, p):
         '''expresion : expresion OR expresion
                      | expresion AND expresion

@@ -45,6 +45,11 @@ def main():
                         mut = 'mut ' if ins.mutable else ''
                         tipo = f": {ins.tipo}" if ins.tipo else ''
                         print(f"  L{ins.linea:<3} let {mut}{ins.nombre}{tipo} = {infijo(ins.valor)}")
+                    elif isinstance(ins, ast.Assignment):
+                        print(f"  L{ins.linea:<3} {infijo(ins.objetivo)} {ins.op} {infijo(ins.valor)}")
+                    elif isinstance(ins, ast.Print):
+                        args = ', '.join(infijo(a) for a in ins.args)
+                        print(f"  L{ins.linea:<3} println partes={ins.partes} args=[{args}]")
 
     print("\n--- Errores ---" if errores.hay_errores() else "\nSin errores.")
     for e in errores:

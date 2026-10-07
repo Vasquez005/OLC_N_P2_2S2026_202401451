@@ -72,6 +72,41 @@ class VarDecl(Node):
         self.tipo = tipo            # str ('i32', 'f64', ...) o None (inferido)
         self.valor = valor          # Node o None (sin inicializar)
 
+class Assignment(Node):
+    """objetivo <op> valor;   con op en '=', '+=', '-=', '*=', '/=', '%='.
+ 
+    `objetivo` es un nodo (no solo un nombre) para que
+    también pueda ser un acceso a arreglo: matriz[i][j] = 5;
+    """
+ 
+    def __init__(self, objetivo, op, valor, linea, columna):
+        super().__init__(linea, columna)
+        self.objetivo = objetivo    # Identifier (o acceso a arreglo, paso 6)
+        self.op = op
+        self.valor = valor
+ 
+ 
+class Print(Node):
+    """println!("texto {} más texto {}", a, b);
+ 
+    `partes` es el formato ya separado: los textos son str y cada
+    marcador {} o {:?} se guarda como None. Por ejemplo:
+        "x = {}, y = {}"  ->  ['x = ', None, ', y = ', None]
+    El generador de código recorre `partes` e imprime un argumento
+    en cada None. Así no tiene que volver a analizar el texto.
+    """
+ 
+    def __init__(self, formato, partes, args, linea, columna):
+        super().__init__(linea, columna)
+        self.formato = formato      # texto original (para reportes)
+        self.partes = partes        # list[str | None]
+        self.args = args            # list[Node]
+ 
+    def num_marcadores(self):
+        return sum(1 for p in self.partes if p is None)
+ 
+ 
+
     # ----------------------------------------------------------------------
     # Expresiones
     # ----------------------------------------------------------------------
@@ -93,13 +128,13 @@ class Identifier(Node):
         self.nombre = nombre
 
 class BinaryOp(Node):
-    """Operación binaria: +, -, *, /, %, &&, ||, ==, !=, <, >, <=, >=."""
+    """izq <op> der   (aritméticos, relacionales y lógicos)."""
 
-    def __init__(self, op, izquierda, derecha, linea, columna):
+    def __init__(self, op, izq, der, linea, columna):
         super().__init__(linea, columna)
-        self.op = op                # str
-        self.izquierda = izquierda  # Node
-        self.derecha = derecha      # Node
+        self.op = op                # '+', '-', '*', '/', '%', '==', '&&', ...
+        self.izq = izq
+        self.der = der
 
 
 class UnaryOp(Node):
