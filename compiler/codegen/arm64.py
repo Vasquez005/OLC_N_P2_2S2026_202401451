@@ -47,6 +47,7 @@ class Arm64Generator:
         self.cadenas = {}       # texto -> etiqueta (para no repetir cadenas)
         self.decimales = {}     # valor f64 -> etiqueta
         self.contador = 0       # para crear etiquetas únicas
+        self.ciclos = []           # pila de etiquetas de ciclos activos (break/continue)
 
     # ==================================================================
     # Utilidades para emitir código
@@ -254,6 +255,113 @@ class Arm64Generator:
         self.pop("x1")                     # x1 = x
         self.operar_enteros(op)            # x0 = x1 op x0
         self.guardar_variable(sym, sym.tipo)
+
+    # --- Control de flujo --------------------------------------------------
+
+    def condicion_valida(self, nodo, sentencia):
+        """Si la condicion tuvo error semantic (no es bool), la sentencia 
+        completa se salta: no hay forma segura de decidir que rama recorrer"""
+        if nodo.condicion.tipo_resultado == BOOL:
+            return True
+        self.comentario(f"{sentencia} omitido: condición inválida (línea {nodo.linea})")
+        return False
+
+    def visit_If(self, nodo):
+            """if c { A } else { B }   se traduce como
+    
+                    <evaluar c en x0>
+                    cbz x0, .Lif_sino      // c es false -> ir a B
+                    <A>
+                    b .Lif_fin
+                .Lif_sino:
+                    <B>                     // otro If si es `else if`
+                .Lif_fin:
+            """
+            if not self.condicion_valida(nodo, 'if'):
+                return
+            sino = self.nueva_etiqueta("if_sino")
+            fin = self.nueva_etiqueta("if_fin")
+    
+            self.comentario(f"if  (línea {nodo.linea})")
+            self.visitar(nodo.condicion)
+            self.emit(f"cbz x0, {sino if nodo.sino else fin}", "condición false -> saltar")
+            self.visit_Block(nodo.entonces)
+    
+            if nodo.sino is not None:
+                self.emit(f"b {fin}", "terminar el if")
+                self.etiqueta(sino)
+                self.visitar(nodo.sino)     # Block o If (else if)
+            self.etiqueta(fin)
+
+
+    def visit_While(self, nodo):
+        """while c { A }   se traduce como
+
+            .Lwhile_inicio:             // aquí salta `continue`
+                <evaluar c en x0>
+                cbz x0, .Lwhile_fin     // c es false -> salir
+                <A>
+                b .Lwhile_inicio
+            .Lwhile_fin:                // aquí salta `break`
+        """
+        if not self.condicion_valida(nodo, 'while'):
+            return
+        inicio = self.nueva_etiqueta("while_inicio")
+        fin = self.nueva_etiqueta("while_fin")
+
+        self.comentario(f"while  (línea {nodo.linea})")
+        self.etiqueta(inicio)
+        self.visitar(nodo.condicion)
+        self.emit(f"cbz x0, {fin}", "condición false -> salir del while")
+        self.cuerpo_ciclo(nodo, continuar=inicio, salir=fin)
+        self.emit(f"b {inicio}", "volver a evaluar la condición")
+        self.etiqueta(fin)
+
+
+    def visit_Loop(self, nodo):
+        """loop { A }   se traduce como
+
+            .Lloop_inicio:              // aquí salta `continue`
+                <A>
+                b .Lloop_inicio
+            .Lloop_fin:                 // aquí salta `break`
+        """
+        inicio = self.nueva_etiqueta("loop_inicio")
+        fin = self.nueva_etiqueta("loop_fin")
+
+        self.comentario(f"loop  (línea {nodo.linea})")
+        self.etiqueta(inicio)
+        self.cuerpo_ciclo(nodo, continuar=inicio, salir=fin)
+        self.emit(f"b {inicio}", "repetir")
+        self.etiqueta(fin)
+
+    def cuerpo_ciclo(self, nodo, continuar, salir):
+        """Genera el cuerpo con el ciclo registrado en la pila, para que
+        los break/continue de adentro sepan a dónde saltar."""
+        self.ciclos.append({'etiqueta': nodo.etiqueta,
+                            'continuar': continuar, 'salir': salir})
+        self.visit_Block(nodo.cuerpo)
+        self.ciclos.pop()
+
+    def buscar_ciclo(self, etiqueta):
+        """Sin etiqueta: el ciclo más interno (el último de la pila).
+        Con etiqueta: el más interno que tenga ese nombre."""
+        if etiqueta is None:
+            return self.ciclos[-1]
+        for ciclo in reversed(self.ciclos):
+            if ciclo['etiqueta'] == etiqueta:
+                return ciclo
+
+    def visit_Break(self, nodo):
+        ciclo = self.buscar_ciclo(nodo.etiqueta)
+        nombre = f" '{nodo.etiqueta}" if nodo.etiqueta else ""
+        self.emit(f"b {ciclo['salir']}", f"break{nombre}  (línea {nodo.linea})")
+
+    def visit_Continue(self, nodo):
+        ciclo = self.buscar_ciclo(nodo.etiqueta)
+        nombre = f" '{nodo.etiqueta}" if nodo.etiqueta else ""
+        self.emit(f"b {ciclo['continuar']}", f"continue{nombre}  (línea {nodo.linea})")
+                        
 
     # --- println! ----------------------------------------------------------
 
