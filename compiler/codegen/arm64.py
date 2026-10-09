@@ -23,6 +23,12 @@ from compiler import ast_nodes as ast
 I32, F64, BOOL, CHAR, STRING = 'i32', 'f64', 'bool', 'char', 'String'
 ERROR = 'None'
 
+# Relacional -> condición de ARM64 para `cset` (después de un `cmp`)
+CONDICION = {'==': 'eq', '!=': 'ne', '<': 'lt', '>': 'gt', '<=': 'le', '>=': 'ge'}
+
+# Operador compuesto -> operador aritmético
+COMPUESTOS = {'+=': '+', '-=': '-', '*=': '*', '/=': '/', '%=': '%'}
+
 # Especificador de printf para cada tipo (ver visit_Print)
 ESPECIFICADOR = {
     I32: '%d',
@@ -97,6 +103,16 @@ class Arm64Generator:
             self.emit(f"movz {w}, #{sin_signo & 0xFFFF}")
             self.emit(f"movk {w}, #{sin_signo >> 16}, lsl #16")
             self.emit(f"sxtw {reg}, {w}", "extender el signo a 64 bits")
+
+    # --- Pila de temporales ------------------------------------------
+    # Para evaluar `a + b` hay que guardar el valor de `a` mientras se
+    # calcula `b`. Se guarda en la pila. Se mueven 16 bytes
+ 
+    def push(self, reg="x0"):
+        self.emit(f"str {reg}, [sp, #-16]!", f"push {reg}")
+ 
+    def pop(self, reg="x1"):
+        self.emit(f"ldr {reg}, [sp], #16", f"pop {reg}")
 
     # --- Acceso a variables en la pila ---------------------------------
 
@@ -218,6 +234,27 @@ class Arm64Generator:
         else:
             self.emit("mov x0, #0", "0 / false / '\\0'")
 
+    # --- Asignaciones ------------------------------------------------------
+ 
+    def visit_Assignment(self, nodo):
+        sym = nodo.simbolo
+        self.comentario(f"{sym.nombre} {nodo.op} ...  (línea {nodo.linea})")
+ 
+        if nodo.op == '=':
+            tipo_valor = self.visitar(nodo.valor)
+            self.guardar_variable(sym, tipo_valor)
+            return
+ 
+        # x += v   se calcula como   x = x + v
+        op = COMPUESTOS[nodo.op]
+        self.revisar_soportado(sym.tipo, nodo.valor.tipo_resultado, nodo)
+        self.cargar_variable(sym)          # x0 = x
+        self.push()
+        self.visitar(nodo.valor)           # x0 = v
+        self.pop("x1")                     # x1 = x
+        self.operar_enteros(op)            # x0 = x1 op x0
+        self.guardar_variable(sym, sym.tipo)
+
     # --- println! ----------------------------------------------------------
 
     def visit_Print(self, nodo):
@@ -283,6 +320,84 @@ class Arm64Generator:
         return nodo.tipo_resultado
 
 
+    # --- Operaciones unarias ----------------------------------------------
+ 
+    def visit_UnaryOp(self, nodo):
+        tipo = self.visitar(nodo.expr)
+        if nodo.op == '!':
+            self.emit("eor x0, x0, #1", "!x  (1 -> 0, 0 -> 1)")
+        elif tipo == I32:
+            self.emit("neg w0, w0", "-x")
+            self.emit("sxtw x0, w0", "extender el signo a 64 bits")
+        else:
+            raise NotImplementedError(
+                f"El negativo de un {tipo} se agrega en G4 (línea {nodo.linea})")
+        return nodo.tipo_resultado
+
+    # --- Operaciones binarias ---------------------------------------------
+ 
+    def visit_BinaryOp(self, nodo):
+        op = nodo.op
+ 
+        # && y || no siempre evalúan los dos lados (cortocircuito)
+        if op in ('&&', '||'):
+            return self.logica_cortocircuito(nodo)
+ 
+        self.revisar_soportado(nodo.izq.tipo_resultado,
+                               nodo.der.tipo_resultado, nodo)
+ 
+        # Patrón general:  x1 = izquierda,  x0 = derecha
+        self.visitar(nodo.izq)
+        self.push()
+        self.visitar(nodo.der)
+        self.pop("x1")
+ 
+        if op in CONDICION:
+            self.emit("cmp x1, x0")
+            self.emit(f"cset x0, {CONDICION[op]}", f"x0 = (izq {op} der) ? 1 : 0")
+        else:
+            self.operar_enteros(op)
+        return nodo.tipo_resultado
+ 
+    def operar_enteros(self, op):
+        """x0 = x1 <op> x0 con aritmética de 32 bits (i32).
+        Se usan los registros w (32 bits) para que un desbordamiento dé
+        la vuelta como un i32 real; luego sxtw copia el signo a x0."""
+        if op == '+':
+            self.emit("add w0, w1, w0")
+        elif op == '-':
+            self.emit("sub w0, w1, w0")
+        elif op == '*':
+            self.emit("mul w0, w1, w0")
+        elif op == '/':
+            self.emit("sdiv w0, w1, w0", "división entera con signo")
+        elif op == '%':
+            # ARM64 no tiene instrucción de módulo:  a % b = a - (a / b) * b
+            self.emit("sdiv w2, w1, w0", "w2 = a / b")
+            self.emit("msub w0, w2, w0, w1", "w0 = a - (a / b) * b")
+        self.emit("sxtw x0, w0", "extender el signo a 64 bits")
+ 
+    def logica_cortocircuito(self, nodo):
+        """a && b:  si a es false, el resultado es false y b NO se evalúa.
+           a || b:  si a es true,  el resultado es true  y b NO se evalúa.
+        Si no se corta, el resultado es simplemente el valor de b."""
+        fin = self.nueva_etiqueta("logico_fin")
+        self.visitar(nodo.izq)
+        if nodo.op == '&&':
+            self.emit(f"cbz x0, {fin}", "izq es false -> resultado false")
+        else:
+            self.emit(f"cbnz x0, {fin}", "izq es true -> resultado true")
+        self.visitar(nodo.der)
+        self.etiqueta(fin)
+        return BOOL
+ 
+    def revisar_soportado(self, izq, der, nodo):
+        if F64 in (izq, der) or STRING in (izq, der):
+            raise NotImplementedError(
+                f"Las operaciones con f64 y String se agregan en G4 "
+                f"(línea {nodo.linea})")
+ 
+ 
 def escapar_asm(texto):
     """Convierte un texto a una cadena válida para .asciz.
     Los caracteres no ASCII (á, ñ, emojis) se escriben como bytes UTF-8
@@ -303,3 +418,4 @@ def escapar_asm(texto):
         else:
             partes.append(f"\\{byte:03o}")
     return ''.join(partes)
+ 
