@@ -26,17 +26,25 @@ ERROR = 'None'
 # Relacional -> condición de ARM64 para `cset` (después de un `cmp`)
 CONDICION = {'==': 'eq', '!=': 'ne', '<': 'lt', '>': 'gt', '<=': 'le', '>=': 'ge'}
 
+# Lo mismo despues de un `fcmp` (comparación de f64). Para < y <= se 
+# usa ´mi´ y ´ls´ en vez de ´lt´ y ´le´, porque el resultado de fcmp es
+# "menos" y "menor o igual" (mi/ls) en vez de "menor" y "menor o igual" (lt/le) como en enteros.
+CONDICION_F64 = {'==': 'eq', '!=': 'ne', '<': 'mi', '>': 'gt', '<=': 'ls', '>=': 'ge'}
+
+# Operador aritmetico -> instrucción de punto flotante
+OPERACION_F64 = {'+': 'fadd', '-': 'fsub', '*': 'fmul', '/': 'fdiv'}
+
 # Operador compuesto -> operador aritmético
 COMPUESTOS = {'+=': '+', '-=': '-', '*=': '*', '/=': '/', '%=': '%'}
 
-# Especificador de printf para cada tipo (ver visit_Print)
 ESPECIFICADOR = {
     I32: '%d',
-    F64: '%.15g',   # 12.5 -> 12.5, 7.0 -> 7, 0.1+0.2 -> 0.3
+    F64: '%s',      # __oxi_f64_str
     STRING: '%s',
-    CHAR: '%c',
+    CHAR: '%s',     # __oxi_char_str
     BOOL: '%s',     # se pasa el texto "true" o "false"
 }
+
 
 
 class Arm64Generator:
@@ -48,6 +56,7 @@ class Arm64Generator:
         self.decimales = {}     # valor f64 -> etiqueta
         self.contador = 0       # para crear etiquetas únicas
         self.ciclos = []           # pila de etiquetas de ciclos activos (break/continue)
+        self.rutinas = set()        # nombres de funciones auxiliares ya generadas
 
     # ==================================================================
     # Utilidades para emitir código
@@ -115,6 +124,15 @@ class Arm64Generator:
     def pop(self, reg="x1"):
         self.emit(f"ldr {reg}, [sp], #16", f"pop {reg}")
 
+    def push_valor(self, tipo):
+        """Guarda el resultado actual: d0 si es f64, x0 en otro caso."""
+        self.push("d0" if tipo == F64 else "x0")
+
+    def llamar(self, rutina):
+        """bl a una rutina de apoyo y la marca para agregarla al .s."""
+        self.rutinas.add(rutina)
+        self.emit(f"bl {rutina}")    
+
     # --- Acceso a variables en la pila ---------------------------------
 
     def _memoria(self, offset):
@@ -154,13 +172,24 @@ class Arm64Generator:
             if not getattr(fn, 'omitir', False):
                 self.visitar(fn)
 
+        # Rutinas de apoyo usadas (en orden fijo para que el .s sea estable)
+        for nombre in sorted(self.rutinas):
+            self.text.append("")
+            self.text.extend(RUTINAS[nombre](self).strip('\n').split('\n'))
+
         salida = [
             "// Generado por OxigenNative",
             "    .global main",
-            "    .extern printf",
+            "    // Funciones de la biblioteca de C que se usan",
+            "    .extern printf, snprintf, malloc, strlen, strcpy, strcat, strcmp",
             "",
             "    .section .data",
             *self.data,
+            "",
+            "    .section .bss",
+            "    .balign 8",
+            "buf_f64:  .skip 64                     // texto de un f64 al imprimir",
+            "buf_char: .skip 8                      // texto UTF-8 de un char",
             "",
             "    .section .text",
             *self.text,
@@ -240,21 +269,19 @@ class Arm64Generator:
     def visit_Assignment(self, nodo):
         sym = nodo.simbolo
         self.comentario(f"{sym.nombre} {nodo.op} ...  (línea {nodo.linea})")
- 
+
         if nodo.op == '=':
             tipo_valor = self.visitar(nodo.valor)
             self.guardar_variable(sym, tipo_valor)
             return
- 
+
         # x += v   se calcula como   x = x + v
         op = COMPUESTOS[nodo.op]
-        self.revisar_soportado(sym.tipo, nodo.valor.tipo_resultado, nodo)
-        self.cargar_variable(sym)          # x0 = x
-        self.push()
-        self.visitar(nodo.valor)           # x0 = v
-        self.pop("x1")                     # x1 = x
-        self.operar_enteros(op)            # x0 = x1 op x0
-        self.guardar_variable(sym, sym.tipo)
+        self.cargar_variable(sym)                   # x0/d0 = x
+        self.push_valor(sym.tipo)
+        tipo_valor = self.visitar(nodo.valor)       # x0/d0 = v
+        resultado = self.aplicar(op, sym.tipo, tipo_valor)
+        self.guardar_variable(sym, resultado)
 
     # --- Control de flujo --------------------------------------------------
 
@@ -446,26 +473,79 @@ class Arm64Generator:
  
     def visit_BinaryOp(self, nodo):
         op = nodo.op
- 
+
         # && y || no siempre evalúan los dos lados (cortocircuito)
         if op in ('&&', '||'):
             return self.logica_cortocircuito(nodo)
- 
-        self.revisar_soportado(nodo.izq.tipo_resultado,
-                               nodo.der.tipo_resultado, nodo)
- 
-        # Patrón general:  x1 = izquierda,  x0 = derecha
-        self.visitar(nodo.izq)
-        self.push()
-        self.visitar(nodo.der)
-        self.pop("x1")
- 
+
+        # Patrón general: evaluar izq, guardarlo, evaluar der, operar
+        tipo_izq = self.visitar(nodo.izq)
+        self.push_valor(tipo_izq)
+        tipo_der = self.visitar(nodo.der)
+        return self.aplicar(op, tipo_izq, tipo_der)
+
+    def aplicar(self, op, tipo_izq, tipo_der):
+        """Aplica `izq op der`. Al entrar, der está en x0/d0 y izq en el
+        tope de la pila. Deja el resultado en x0/d0 y devuelve su tipo.
+        """
+
+        # ---- f64 (si cualquiera de los dos lo es, se opera en f64) ----
+        if F64 in (tipo_izq, tipo_der):
+            if tipo_der == I32:
+                self.emit("scvtf d0, x0", "promoción der i32 -> f64")
+            if tipo_izq == F64:
+                self.pop("d1")
+            else:
+                self.pop("x1")
+                self.emit("scvtf d1, x1", "promoción izq i32 -> f64")
+
+            if op in CONDICION_F64:
+                self.emit("fcmp d1, d0")
+                self.emit(f"cset x0, {CONDICION_F64[op]}",
+                          f"x0 = (izq {op} der) ? 1 : 0")
+                return BOOL
+            if op == '%':
+                # a % b = a - trunc(a / b) * b
+                self.emit("fdiv d2, d1, d0", "d2 = a / b")
+                self.emit("frintz d2, d2", "d2 = trunc(a / b)")
+                self.emit("fmsub d0, d2, d0, d1", "d0 = a - d2 * b")
+            else:
+                self.emit(f"{OPERACION_F64[op]} d0, d1, d0", f"d0 = izq {op} der")
+            return F64
+
+        # ---- String ------------------------------------------------------
+        if STRING in (tipo_izq, tipo_der):
+            self.pop("x1")                          # x1 = izq, x0 = der
+            if op == '*' and tipo_izq == I32:
+                # n * "ab": x0 ya es el texto y x1 la cantidad
+                self.llamar("__oxi_repetir")
+                return STRING
+            # Las demás rutinas reciben (x0 = izq, x1 = der)
+            self.emit("mov x2, x0")
+            self.emit("mov x0, x1", "x0 = izq")
+            self.emit("mov x1, x2", "x1 = der")
+            if op in CONDICION:
+                # strcmp devuelve <0, 0 o >0 (orden alfabético)
+                self.emit("bl strcmp")
+                self.emit("cmp w0, #0")
+                self.emit(f"cset x0, {CONDICION[op]}", f"x0 = (izq {op} der) ? 1 : 0")
+                return BOOL
+            if op == '+':
+                self.llamar("__oxi_concat")
+            else:                                   # "ab" * n
+                self.llamar("__oxi_repetir")
+            return STRING
+
+        # ---- Enteros (i32, bool, char) ----------------------------------
+        self.pop("x1")                              # x1 = izq, x0 = der
         if op in CONDICION:
             self.emit("cmp x1, x0")
             self.emit(f"cset x0, {CONDICION[op]}", f"x0 = (izq {op} der) ? 1 : 0")
-        else:
-            self.operar_enteros(op)
-        return nodo.tipo_resultado
+            return BOOL
+        self.operar_enteros(op)
+        return I32
+
+    
  
     def operar_enteros(self, op):
         """x0 = x1 <op> x0 con aritmética de 32 bits (i32).
@@ -484,7 +564,7 @@ class Arm64Generator:
             self.emit("sdiv w2, w1, w0", "w2 = a / b")
             self.emit("msub w0, w2, w0, w1", "w0 = a - (a / b) * b")
         self.emit("sxtw x0, w0", "extender el signo a 64 bits")
- 
+
     def logica_cortocircuito(self, nodo):
         """a && b:  si a es false, el resultado es false y b NO se evalúa.
            a || b:  si a es true,  el resultado es true  y b NO se evalúa.
@@ -498,12 +578,7 @@ class Arm64Generator:
         self.visitar(nodo.der)
         self.etiqueta(fin)
         return BOOL
- 
-    def revisar_soportado(self, izq, der, nodo):
-        if F64 in (izq, der) or STRING in (izq, der):
-            raise NotImplementedError(
-                f"Las operaciones con f64 y String se agregan en G4 "
-                f"(línea {nodo.linea})")
+
  
  
 def escapar_asm(texto):
@@ -526,4 +601,170 @@ def escapar_asm(texto):
         else:
             partes.append(f"\\{byte:03o}")
     return ''.join(partes)
- 
+
+
+def _rutina_f64_str(gen):
+    """d0 -> x0 = texto del decimal.
+    Si el número no tiene parte decimal se imprime con ".0" (3.0, 0.0),
+    como muestra el enunciado; si la tiene, con hasta 15 cifras
+    significativas (12.5, 3.1416, 0.3)."""
+    limite = gen.decimal(1e15)
+    entero = gen.cadena("%.1f")
+    general = gen.cadena("%.15g")
+    return f"""
+// ---- __oxi_f64_str: d0 -> x0 = texto del f64 ----
+__oxi_f64_str:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    adrp x2, {general}
+    add x2, x2, :lo12:{general}         // formato "%.15g" por defecto
+    frintz d1, d0                       // d1 = parte entera
+    fcmp d1, d0
+    b.ne .Lf64_formato                  // tiene decimales -> "%.15g"
+    fabs d1, d0
+    adrp x9, {limite}
+    ldr d2, [x9, :lo12:{limite}]
+    fcmp d1, d2
+    b.ge .Lf64_formato                  // número enorme -> "%.15g"
+    adrp x2, {entero}
+    add x2, x2, :lo12:{entero}          // entero -> "%.1f" (3.0)
+.Lf64_formato:
+    adrp x0, buf_f64
+    add x0, x0, :lo12:buf_f64
+    mov x1, #64
+    bl snprintf                         // snprintf(buf, 64, formato, d0)
+    adrp x0, buf_f64
+    add x0, x0, :lo12:buf_f64
+    ldp x29, x30, [sp], #16
+    ret
+"""
+
+
+def _rutina_char_str(gen):
+    return """
+// ---- __oxi_char_str: x0 = código Unicode -> x0 = texto UTF-8 ----
+__oxi_char_str:
+    adrp x1, buf_char
+    add x1, x1, :lo12:buf_char
+    cmp x0, #0x80
+    b.hs .Lchar_2bytes
+    strb w0, [x1]                       // ASCII: 1 byte
+    strb wzr, [x1, #1]
+    b .Lchar_fin
+.Lchar_2bytes:
+    cmp x0, #0x800
+    b.hs .Lchar_3bytes
+    lsr x2, x0, #6                      // 110xxxxx 10xxxxxx  (á, ñ, é...)
+    orr x2, x2, #0xC0
+    strb w2, [x1]
+    and x2, x0, #0x3F
+    orr x2, x2, #0x80
+    strb w2, [x1, #1]
+    strb wzr, [x1, #2]
+    b .Lchar_fin
+.Lchar_3bytes:
+    cmp x0, #0x10, lsl #12              // 0x10000
+    b.hs .Lchar_4bytes
+    lsr x2, x0, #12                     // 1110xxxx 10xxxxxx 10xxxxxx
+    orr x2, x2, #0xE0
+    strb w2, [x1]
+    lsr x2, x0, #6
+    and x2, x2, #0x3F
+    orr x2, x2, #0x80
+    strb w2, [x1, #1]
+    and x2, x0, #0x3F
+    orr x2, x2, #0x80
+    strb w2, [x1, #2]
+    strb wzr, [x1, #3]
+    b .Lchar_fin
+.Lchar_4bytes:
+    lsr x2, x0, #18                     // 11110xxx + 3 bytes (emojis)
+    orr x2, x2, #0xF0
+    strb w2, [x1]
+    lsr x2, x0, #12
+    and x2, x2, #0x3F
+    orr x2, x2, #0x80
+    strb w2, [x1, #1]
+    lsr x2, x0, #6
+    and x2, x2, #0x3F
+    orr x2, x2, #0x80
+    strb w2, [x1, #2]
+    and x2, x0, #0x3F
+    orr x2, x2, #0x80
+    strb w2, [x1, #3]
+    strb wzr, [x1, #4]
+.Lchar_fin:
+    mov x0, x1
+    ret
+"""
+
+
+def _rutina_concat(gen):
+    return """
+// ---- __oxi_concat: x0 = a, x1 = b -> x0 = a + b (nuevo en el heap) ----
+__oxi_concat:
+    stp x29, x30, [sp, #-48]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]             // guardar registros que se usan
+    str x21, [sp, #32]
+    mov x19, x0                         // x19 = a
+    mov x20, x1                         // x20 = b
+    bl strlen
+    mov x21, x0                         // x21 = largo de a
+    mov x0, x20
+    bl strlen                           // x0 = largo de b
+    add x0, x0, x21
+    add x0, x0, #1                      // + 1 por el '\\0' final
+    bl malloc                           // reservar en el heap
+    mov x1, x19
+    bl strcpy                           // copiar a
+    mov x1, x20
+    bl strcat                           // agregar b
+    ldp x19, x20, [sp, #16]
+    ldr x21, [sp, #32]
+    ldp x29, x30, [sp], #48
+    ret
+"""
+
+
+def _rutina_repetir(gen):
+    return """
+// ---- __oxi_repetir: x0 = texto, x1 = n -> x0 = texto repetido n veces ----
+__oxi_repetir:
+    stp x29, x30, [sp, #-48]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    mov x19, x0                         // x19 = texto
+    cmp x1, #0
+    csel x20, x1, xzr, gt               // x20 = n (si es negativo, 0)
+    bl strlen
+    mul x0, x0, x20
+    add x0, x0, #1
+    bl malloc                           // espacio para largo * n + 1
+    mov x21, x0                         // x21 = resultado
+    strb wzr, [x21]                     // empieza como cadena vacía
+    mov x22, #0                         // x22 = contador
+.Lrepetir_ciclo:
+    cmp x22, x20
+    b.ge .Lrepetir_fin
+    mov x0, x21
+    mov x1, x19
+    bl strcat                           // resultado += texto
+    add x22, x22, #1
+    b .Lrepetir_ciclo
+.Lrepetir_fin:
+    mov x0, x21
+    ldp x19, x20, [sp, #16]
+    ldp x21, x22, [sp, #32]
+    ldp x29, x30, [sp], #48
+    ret
+"""
+
+
+RUTINAS = {
+    "__oxi_f64_str": _rutina_f64_str,
+    "__oxi_char_str": _rutina_char_str,
+    "__oxi_concat": _rutina_concat,
+    "__oxi_repetir": _rutina_repetir,
+}
