@@ -15,10 +15,10 @@ def compilar(codigo, ejecutar=True):
     """Devuelve un diccionario con todo lo que la interfaz necesita:
         errores   lista de CompilerError (léxicos, sintácticos, semánticos)
         tabla     filas del reporte de tabla de símbolos
-        ast       raíz del AST para graph
-        asm       texto del archivo .s o ''
+        ast       raíz del AST (para el reporte Graphviz)
+        asm       texto del archivo .s ('' si no se generó)
         salida    lo que imprimió el programa en QEMU
-        error_ejecucion     mensaje si falló gcc o QEMU
+        error_ejecucion  mensaje si falló gcc o QEMU
     """
     errores = ErrorList()
     resultado = {'errores': errores, 'tabla': [], 'ast': None,

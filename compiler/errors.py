@@ -1,5 +1,5 @@
 """
-Manejo de errores del compilador
+Manejo de errores del compilador OxigenNative.
 
 Todas las fases (léxica, sintáctica, semántica) registran sus errores
 en una misma lista para luego generar el reporte de errores.
@@ -20,12 +20,10 @@ class CompilerError:
     columna: int
 
     def __str__(self):
-        # Formato de error para mostrar en consola
         return (f"[Error {self.tipo}] Línea {self.linea}, Columna {self.columna}\n"
                 f"{self.descripcion}")
 
-    def to_dictionary(self):
-        # envia JSON al front-end
+    def to_dict(self):
         return {
             "tipo": self.tipo,
             "descripcion": self.descripcion,

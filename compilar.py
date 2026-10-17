@@ -1,11 +1,17 @@
 """
 Compila y ejecuta un archivo desde la terminal (sin la interfaz web).
 
+    python compilar.py tests/g1_print.rs          # errores + salida
+    python compilar.py tests/g1_print.rs --asm    # muestra también el ARM64
+    python compilar.py tests/g1_print.rs --reportes   # genera los reportes
+
 El ensamblador generado queda en build/programa.s
+Los reportes quedan en build/reportes/
 """
 import sys
 
 from compiler.compilador import compilar
+from compiler.reports import guardar_reportes
 
 
 def main():
@@ -31,6 +37,11 @@ def main():
     print(r['salida'], end='')
     if r['error_ejecucion']:
         print(f"\n[Error de ejecución] {r['error_ejecucion']}")
+
+    if '--reportes' in sys.argv:
+        print("========== Reportes ==========")
+        for ruta in guardar_reportes(r, codigo):
+            print(ruta)
 
 
 if __name__ == "__main__":
