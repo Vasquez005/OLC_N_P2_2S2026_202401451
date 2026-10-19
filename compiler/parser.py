@@ -1,6 +1,15 @@
 """
 Analizador sintáctico de OxigenNative
 
+Construye el AST definido en ast_nodes.py.
+
+Paso 1: programa con funciones sin parámetros, bloques,
+        declaraciones de variables y literales.
+Paso 2: expresiones aritméticas, relacionales y lógicas con precedencia.
+Paso 3: asignaciones simples y compuestas, println!.
+Paso 4: if / else if / else, while, loop, break, continue y etiquetas.
+        println! también acepta un solo valor sin formato: println!(x).
+
 Uso:
     from compiler.parser import Parser
     ast = Parser(errores).parse(codigo)
@@ -21,6 +30,7 @@ class Parser:
     # Precedencia de operadores, de MENOR a MAYOR (igual que en Rust).
     #   left     -> a - b - c  se agrupa como (a - b) - c
     #   right    -> !!a        se agrupa como !(!a)
+    #   nonassoc -> a < b < c  es un error de sintaxis (como en Rust)
     # ------------------------------------------------------------------
     precedence = (
         ('left', 'OR'),
@@ -75,7 +85,7 @@ class Parser:
         'funciones : funcion'
         p[0] = [p[1]]
 
-    # --- Funciones (parámetros y retorno se agregan en el paso 5) -------
+    # --- Funciones ------------------------------------------------------
 
     def p_funcion(self, p):
         'funcion : FN ID LPAREN RPAREN bloque'
@@ -239,15 +249,33 @@ class Parser:
         linea, col = self._pos(p, 1)
         p[0] = ast.Print("", [], [], linea, col)
 
-    def p_impresion_texto(self, p):
-        'impresion : PRINTLN LPAREN STRING RPAREN'
+    def p_impresion_una(self, p):
+        'impresion : PRINTLN LPAREN expresion RPAREN'
+        # Dos casos (los dos aparecen en el enunciado):
+        #   println!("Hola {{}}")  -> el texto es el formato
+        #   println!(edad)         -> se imprime el valor, como println!("{}", edad)
+        #   println!("a" + b)      -> también se imprime el valor
         linea, col = self._pos(p, 1)
-        p[0] = ast.Print(p[3], self._partes_formato(p[3]), [], linea, col)
+        expr = p[3]
+        if getattr(expr, '_cadena_directa', False):
+            p[0] = ast.Print(expr.valor, self._partes_formato(expr.valor), [], linea, col)
+        else:
+            p[0] = ast.Print("{}", [None], [expr], linea, col)
 
     def p_impresion_args(self, p):
-        'impresion : PRINTLN LPAREN STRING COMMA lista_expresiones RPAREN'
+        'impresion : PRINTLN LPAREN expresion COMMA lista_expresiones RPAREN'
         linea, col = self._pos(p, 1)
-        p[0] = ast.Print(p[3], self._partes_formato(p[3]), p[5], linea, col)
+        formato = p[3]
+        if not getattr(formato, '_cadena_directa', False):
+            self.errores.agregar(
+                SINTACTICO,
+                "El primer argumento de println! con varios valores debe ser "
+                "una cadena de formato, por ejemplo: println!(\"{} {}\", a, b).",
+                formato.linea, formato.columna)
+            p[0] = ast.Print("", [], [], linea, col)
+            return
+        p[0] = ast.Print(formato.valor, self._partes_formato(formato.valor),
+                         p[5], linea, col)
 
     def p_lista_expresiones(self, p):
         '''lista_expresiones : lista_expresiones COMMA expresion
@@ -276,7 +304,7 @@ class Parser:
             partes.append(''.join(actual))
         return partes
 
-    # --- Tipos (los arreglos [T; N] se agregan en el paso 6) -----------
+    # --- Tipos -------------------------------------------------------------
 
     def p_tipo(self, p):
         '''tipo : T_I32
@@ -356,6 +384,9 @@ class Parser:
         'primario : STRING'
         linea, col = self._pos(p, 1)
         p[0] = ast.Literal(p[1], 'String', linea, col)
+        # Marca para println!: un "texto" escrito tal cual es cadena de
+        # formato; String::from("...") o una expresión no lo son.
+        p[0]._cadena_directa = True
 
     def p_primario_string_from(self, p):
         'primario : T_STRING DCOLON ID LPAREN STRING RPAREN'

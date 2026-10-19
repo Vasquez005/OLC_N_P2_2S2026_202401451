@@ -10,6 +10,7 @@ import os
 import traceback
 
 from django.http import FileResponse, Http404, JsonResponse
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -27,6 +28,13 @@ REPORTES = {
     'ast': ('ast.svg', 'image/svg+xml'),
     'ast.dot': ('ast.dot', 'text/plain; charset=utf-8'),
 }
+
+
+@require_GET
+def index(request):
+    """Página principal: la interfaz del compilador (editor, consola,
+    ARM64 y reportes). Toda la lógica está en static/api/app.js."""
+    return render(request, 'api/index.html')
 
 
 @require_GET

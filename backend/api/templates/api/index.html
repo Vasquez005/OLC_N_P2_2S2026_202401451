@@ -1,0 +1,102 @@
+{% load static %}<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OxigenNative</title>
+<link rel="stylesheet" href="{% static 'api/app.css' %}">
+</head>
+<body>
+
+<!-- ============================================================
+     Barra de herramientas (sección 3.1.2 del enunciado)
+     ============================================================ -->
+<header class="barra">
+  <div class="marca">OxigenNative</div>
+  <span id="nombre-archivo" class="archivo">sin_titulo.rs</span>
+
+  <nav class="acciones">
+    <button id="btn-nuevo" title="Nuevo archivo">Nuevo</button>
+    <button id="btn-abrir" title="Abrir un archivo .rs">Abrir</button>
+    <button id="btn-guardar" title="Guardar (Ctrl/Cmd + S)">Guardar</button>
+    <button id="btn-ejecutar" class="principal" title="Ejecutar (Ctrl/Cmd + Enter)">Ejecutar</button>
+
+    <details class="menu">
+      <summary>Reportes</summary>
+      <div class="menu-lista">
+        <a href="/api/reporte/errores" target="_blank">Errores (HTML)</a>
+        <a href="/api/reporte/tabla" target="_blank">Tabla de símbolos (HTML)</a>
+        <a href="/api/reporte/ast" target="_blank">AST (SVG)</a>
+        <a href="/api/reporte/ast.dot" target="_blank">AST (DOT)</a>
+      </div>
+    </details>
+  </nav>
+
+  <!-- Selector de archivo oculto: lo activa el botón "Abrir" -->
+  <input id="entrada-archivo" type="file" accept=".rs,.txt" hidden>
+</header>
+
+<main class="contenido">
+
+  <!-- ==========================================================
+       Fila superior: editor + código ARM64 generado
+       ========================================================== -->
+  <section class="panel editor-panel">
+    <div class="panel-titulo">
+      Editor
+      <span id="posicion" class="detalle">Lín 1, Col 1</span>
+    </div>
+    <div class="editor">
+      <pre id="numeros" class="numeros" aria-hidden="true">1</pre>
+      <textarea id="codigo" spellcheck="false" wrap="off"
+                autocomplete="off" autocapitalize="off"></textarea>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-titulo">
+      Código ARM64 generado
+      <button id="btn-copiar-asm" class="pequeno" title="Copiar el código ARM64">Copiar</button>
+    </div>
+    <pre id="asm" class="monoespaciado vacio">El código ARM64 aparecerá aquí después de ejecutar.</pre>
+  </section>
+
+  <!-- ==========================================================
+       Fila inferior: consola de salida + reportes
+       ========================================================== -->
+  <section class="panel">
+    <div class="panel-titulo">
+      Consola de salida
+      <button id="btn-limpiar" class="pequeno" title="Limpiar la consola">Limpiar</button>
+    </div>
+    <pre id="consola" class="monoespaciado consola"></pre>
+  </section>
+
+  <section class="panel">
+    <div class="pestanas" role="tablist">
+      <button class="pestana activa" data-pestana="errores">Errores <span id="cuenta-errores" class="cuenta"></span></button>
+      <button class="pestana" data-pestana="tabla">Tabla de símbolos</button>
+      <button class="pestana" data-pestana="ast">AST</button>
+    </div>
+
+    <div id="pestana-errores" class="pestana-contenido activa">
+      <p class="vacio">Ejecute el programa para ver los errores.</p>
+    </div>
+    <div id="pestana-tabla" class="pestana-contenido">
+      <p class="vacio">Ejecute el programa para ver la tabla de símbolos.</p>
+    </div>
+    <div id="pestana-ast" class="pestana-contenido">
+      <div class="zoom">
+        <button class="pequeno" data-zoom="-1" title="Alejar">−</button>
+        <button class="pequeno" data-zoom="0" title="Tamaño original">100%</button>
+        <button class="pequeno" data-zoom="1" title="Acercar">+</button>
+      </div>
+      <div id="ast" class="ast"><p class="vacio">Ejecute el programa para ver el AST.</p></div>
+    </div>
+  </section>
+
+</main>
+
+<script src="{% static 'api/app.js' %}"></script>
+</body>
+</html>
