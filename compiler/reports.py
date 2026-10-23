@@ -20,7 +20,7 @@ CARPETA_REPORTES = os.path.join(
 # Atributos que agrega el semántico y que NO forman parte del árbol
 # (se muestran de otra forma o no aportan al reporte).
 ATRIBUTOS_OCULTOS = {'simbolo', 'tipo_resultado', 'usar_defecto', 'omitir', 'partes',
-                     'tipo_funcion'}
+                     'tipo_funcion', 'indice_constante', 'tipo_objeto', 'desde', 'hasta'}
 
 
 # ======================================================================

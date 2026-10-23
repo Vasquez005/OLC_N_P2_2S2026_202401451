@@ -11,6 +11,8 @@ Paso 4: if / else if / else, while, loop, break, continue y etiquetas.
         println! también acepta un solo valor sin formato: println!(x).
 Paso 5: funciones con parámetros y tipo de retorno, return, llamadas y
         expresiones como instrucción.
+Paso 6: arreglos: tipo [T; N], [a, b], [v; N], a[i][j], asignación a
+        un elemento, &a[i..j] y métodos objeto.metodo(args).
 
 Uso:
     from compiler.parser import Parser
@@ -267,15 +269,19 @@ class Parser:
     # la variable exista y sea `mut`.
 
     def p_asignacion(self, p):
-        '''asignacion : ID ASSIGN expresion
-                      | ID PLUS_ASSIGN expresion
-                      | ID MINUS_ASSIGN expresion
-                      | ID TIMES_ASSIGN expresion
-                      | ID DIVIDE_ASSIGN expresion
-                      | ID MOD_ASSIGN expresion'''
-        linea, col = self._pos(p, 1)
-        objetivo = ast.Identifier(p[1], linea, col)
-        p[0] = ast.Assignment(objetivo, p[2], p[3], linea, col)
+        '''asignacion : primario ASSIGN expresion
+                      | primario PLUS_ASSIGN expresion
+                      | primario MINUS_ASSIGN expresion
+                      | primario TIMES_ASSIGN expresion
+                      | primario DIVIDE_ASSIGN expresion
+                      | primario MOD_ASSIGN expresion'''
+        # El objetivo puede ser una variable (x = 5) o un elemento de un
+        # arreglo (matriz[1][2] = 7). Cualquier otra cosa no se puede asignar.
+        objetivo = p[1]
+        if not isinstance(objetivo, (ast.Identifier, ast.Index)):
+            self.errores.agregar(SINTACTICO, "No se puede asignar un valor a esta expresión.",
+                                 objetivo.linea, objetivo.columna)
+        p[0] = ast.Assignment(objetivo, p[2], p[3], objetivo.linea, objetivo.columna)
 
     # --- println! ------------------------------------------------------
     #   println!();
@@ -351,6 +357,11 @@ class Parser:
                 | T_CHAR
                 | T_STRING'''
         p[0] = p[1]
+
+    def p_tipo_arreglo(self, p):
+        'tipo : LBRACKET tipo SEMI INT RBRACKET'
+        # [i32; 3] y, por recursión, [[i32; 3]; 2], [[[f64; 2]; 2]; 2]...
+        p[0] = f"[{p[2]}; {p[4]}]"
 
     # --- Expresiones -----------------------------------------------------
     # La gramática es ambigua a propósito: la tabla `precedence` decide
@@ -448,6 +459,33 @@ class Parser:
         'primario : ID'
         linea, col = self._pos(p, 1)
         p[0] = ast.Identifier(p[1], linea, col)
+
+    def p_primario_arreglo(self, p):
+        'primario : LBRACKET lista_expresiones RBRACKET'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.ArrayLiteral(p[2], linea, col)
+
+    def p_primario_arreglo_repetido(self, p):
+        'primario : LBRACKET expresion SEMI INT RBRACKET'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.ArrayRepeat(p[2], p[4], linea, col)
+
+    def p_primario_indice(self, p):
+        'primario : primario LBRACKET expresion RBRACKET'
+        # La posición es la del inicio (numeros[5] -> la de "numeros"),
+        # igual que el ejemplo del error 7 del enunciado.
+        p[0] = ast.Index(p[1], p[3], p[1].linea, p[1].columna)
+
+    def p_primario_slice(self, p):
+        'primario : AMP primario LBRACKET expresion DOTDOT expresion RBRACKET'
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Slice(p[2], p[4], p[6], linea, col)
+
+    def p_primario_metodo(self, p):
+        '''primario : primario DOT ID LPAREN lista_expresiones RPAREN
+                    | primario DOT ID LPAREN RPAREN'''
+        args = p[5] if len(p) == 7 else []
+        p[0] = ast.MethodCall(p[1], p[3], args, p[1].linea, p[1].columna)
 
     def p_primario_llamada(self, p):
         '''primario : ID LPAREN lista_expresiones RPAREN

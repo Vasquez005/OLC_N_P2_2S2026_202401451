@@ -1,30 +1,30 @@
 """
-Analizador semántico
- 
-Recorre el AST y se hace tres cosas:
- 
+Analizador semántico de OxigenNative.
+
+Recorre el AST (patrón visitor) y hace tres cosas:
+
   1. Llena la tabla de símbolos (ámbitos, tipos y offsets en la pila).
-  2. Se calcula el tipo de cada expresión y lo ANOTA en el nodo:
+  2. Calcula el tipo de cada expresión y lo ANOTA en el nodo:
          nodo.tipo_resultado = 'i32' | 'f64' | 'bool' | 'char' | 'String' | 'None'
      Los usos de variables quedan enlazados a su símbolo:
          Identifier.simbolo, VarDecl.simbolo, Assignment.simbolo
   3. Registra los errores semánticos con línea y columna.
- 
-El generador de ARM64 recorrerá este mismo AST ya anotado.
- 
-Resiliencia: un error no detiene el análisis. Una
+
+El generador de ARM64 recorrerá después este mismo AST ya anotado.
+
+Resiliencia (sección 3.5.1): un error no detiene el análisis. Una
 expresión inválida recibe el tipo 'None' (así lo muestra el enunciado:
 `println!(resultado3)` imprime None) y las instrucciones inválidas se
 marcan con `nodo.omitir = True` para que el generador las salte.
- 
+
 Uso:
     tabla = Semantic(errores).analizar(arbol)
 """
-
 from compiler import ast_nodes as ast
 from compiler.errors import ErrorList, SEMANTICO
 from compiler.symbol_table import SymbolTable, VALOR_POR_DEFECTO, PARAMETRO, FUNCION
-    
+from compiler.tipos import es_arreglo, elemento, longitud
+
 # ----------------------------------------------------------------------
 # Tipos
 # ----------------------------------------------------------------------
@@ -276,46 +276,56 @@ class Semantic:
             nodo.nombre, tipo, nodo.mutable, nodo.linea, nodo.columna, valor)
 
     def visit_Assignment(self, nodo):
-        nodo.omitir = False
+        nodo.omitir = True              # se pone en False si todo está bien
         tipo_valor = self.valor(nodo.valor)
-
-        # Por ahora el objetivo siempre es un Identifier (arreglos: paso 6)
         objetivo = nodo.objetivo
-        sym = self.tabla.buscar(objetivo.nombre)
-        if sym is None:
-            self.error(objetivo, f"La variable '{objetivo.nombre}' no ha sido declarada.")
-            nodo.omitir = True
-            return
-        objetivo.simbolo = sym
-        objetivo.tipo_resultado = sym.tipo
+
+        # 1) ¿Qué se modifica?  x = ...   o   a[i][j] = ...
+        if isinstance(objetivo, ast.Index):
+            tipo_destino = self.valor(objetivo)     # tipo del elemento
+            raiz = variable_raiz(objetivo)
+            if raiz is None:
+                self.error(objetivo, "Solo se pueden modificar elementos de un "
+                                     "arreglo guardado en una variable.")
+                return
+            sym = getattr(raiz, 'simbolo', None)
+            if sym is None:
+                return                              # variable no declarada (ya reportado)
+        else:
+            sym = self.tabla.buscar(objetivo.nombre)
+            if sym is None:
+                self.error(objetivo, f"La variable '{objetivo.nombre}' no ha sido declarada.")
+                return
+            objetivo.simbolo = sym
+            objetivo.tipo_resultado = sym.tipo
+            tipo_destino = sym.tipo
         nodo.simbolo = sym
 
+        # 2) La variable (o el arreglo que contiene el elemento) debe ser mut
         if not sym.mutable:
             self.error(nodo, f"No es posible modificar la variable '{sym.nombre}' "
                              f"porque fue declarada como inmutable.")
-            nodo.omitir = True
             return
 
-        if sym.tipo == ERROR or tipo_valor == ERROR:
-            nodo.omitir = True
+        if tipo_destino == ERROR or tipo_valor == ERROR:
             return
 
-        # x += v  se valida como  x = x + v
+        # 3) x += v  se valida como  x = x + v
         if nodo.op in COMPUESTOS:
             op = COMPUESTOS[nodo.op]
-            resultado = ARITMETICAS[op].get((sym.tipo, tipo_valor))
+            resultado = ARITMETICAS[op].get((tipo_destino, tipo_valor))
             if resultado is None:
                 self.error(nodo, f"No es posible aplicar el operador '{nodo.op}' "
-                                 f"entre los tipos {sym.tipo} y {tipo_valor}.")
-                nodo.omitir = True
+                                 f"entre los tipos {tipo_destino} y {tipo_valor}.")
                 return
             tipo_valor = resultado
 
-        if not asignable(sym.tipo, tipo_valor):
+        if not asignable(tipo_destino, tipo_valor):
             self.error(nodo.valor,
                        f"Tipos incompatibles. No es posible utilizar un valor de tipo "
-                       f"{tipo_valor} donde se esperaba un valor de tipo {sym.tipo}.")
-            nodo.omitir = True
+                       f"{tipo_valor} donde se esperaba un valor de tipo {tipo_destino}.")
+            return
+        nodo.omitir = False
 
     # ==================================================================
     # println!
@@ -482,6 +492,123 @@ class Semantic:
 
         nodo.tipo_resultado = sym.tipo if sym.tipo is not None else VOID
         return nodo.tipo_resultado
+
+
+    # ==================================================================
+    # Arreglos (paso 6)
+    # ==================================================================
+
+    def visit_ArrayLiteral(self, nodo):
+        """[e1, e2, ...]: todos los elementos deben ser del mismo tipo.
+        El tipo resultante es "[T; cantidad]"."""
+        tipos = [self.valor(e) for e in nodo.elementos]
+        nodo.tipo_resultado = ERROR
+        if ERROR in tipos:
+            return ERROR
+        primero = tipos[0]
+        for e, t in zip(nodo.elementos, tipos):
+            if t != primero:
+                self.error(e, f"Los elementos de un arreglo deben ser del mismo tipo: "
+                              f"se esperaba {primero}, pero se encontró {t}.")
+                return ERROR
+        nodo.tipo_resultado = f"[{primero}; {len(tipos)}]"
+        return nodo.tipo_resultado
+
+    def visit_ArrayRepeat(self, nodo):
+        """[valor; N]"""
+        t = self.valor(nodo.valor)
+        nodo.tipo_resultado = ERROR
+        if t == ERROR:
+            return ERROR
+        if nodo.cantidad <= 0:
+            self.error(nodo, "La cantidad de elementos de un arreglo debe ser mayor que 0.")
+            return ERROR
+        nodo.tipo_resultado = f"[{t}; {nodo.cantidad}]"
+        return nodo.tipo_resultado
+
+    def visit_Index(self, nodo):
+        """base[indice]. Si el índice es una constante se revisan los
+        límites aquí (error 7 de la sección 3.5.1); si es una variable,
+        el generador agrega la revisión en tiempo de ejecución."""
+        tipo_base = self.valor(nodo.base)
+        tipo_indice = self.valor(nodo.indice)
+        nodo.tipo_resultado = ERROR
+        nodo.indice_constante = None
+        if ERROR in (tipo_base, tipo_indice):
+            return ERROR
+        if not es_arreglo(tipo_base):
+            self.error(nodo, f"No es posible usar un índice sobre un valor de tipo {tipo_base}.")
+            return ERROR
+        if tipo_indice != I32:
+            self.error(nodo.indice, f"El índice de un arreglo debe ser de tipo i32, "
+                                    f"pero es de tipo {tipo_indice}.")
+            return ERROR
+        constante = constante_entera(nodo.indice)
+        if constante is not None:
+            if not 0 <= constante < longitud(tipo_base):
+                self.error(nodo, "Índice fuera de los límites del arreglo.")
+                return ERROR
+            nodo.indice_constante = constante
+        nodo.tipo_resultado = elemento(tipo_base)
+        return nodo.tipo_resultado
+
+    def visit_Slice(self, nodo):
+        """&base[inicio..fin]: se crea un arreglo nuevo con esos elementos.
+        Los límites deben ser constantes porque el tamaño del resultado
+        forma parte de su tipo ([T; fin - inicio])."""
+        tipo_base = self.valor(nodo.base)
+        self.valor(nodo.inicio)
+        self.valor(nodo.fin)
+        nodo.tipo_resultado = ERROR
+        if tipo_base == ERROR:
+            return ERROR
+        if not es_arreglo(tipo_base):
+            self.error(nodo, f"No es posible tomar un slice de un valor de tipo {tipo_base}.")
+            return ERROR
+        desde, hasta = constante_entera(nodo.inicio), constante_entera(nodo.fin)
+        if desde is None or hasta is None:
+            self.error(nodo, "Los límites de un slice deben ser números enteros constantes.")
+            return ERROR
+        if not 0 <= desde <= hasta <= longitud(tipo_base):
+            self.error(nodo, "Índice fuera de los límites del arreglo.")
+            return ERROR
+        nodo.desde, nodo.hasta = desde, hasta
+        nodo.tipo_resultado = f"[{elemento(tipo_base)}; {hasta - desde}]"
+        return nodo.tipo_resultado
+
+    def visit_MethodCall(self, nodo):
+        """Por ahora: .len() para arreglos y String."""
+        tipo_objeto = self.valor(nodo.objeto)
+        for arg in nodo.args:
+            self.valor(arg)
+        nodo.tipo_objeto = tipo_objeto
+        nodo.tipo_resultado = ERROR
+        if tipo_objeto == ERROR:
+            return ERROR
+        if nodo.metodo == 'len' and not nodo.args and (es_arreglo(tipo_objeto)
+                                                        or tipo_objeto == STRING):
+            nodo.tipo_resultado = I32
+            return I32
+        self.error(nodo, f"El método '{nodo.metodo}' no existe para el tipo {tipo_objeto} "
+                         f"(o recibió argumentos incorrectos).")
+        return ERROR
+
+
+def constante_entera(nodo):
+    """Valor de un índice constante: 5 -> 5, -1 -> -1. Si no es constante: None."""
+    if isinstance(nodo, ast.Literal) and nodo.tipo == I32:
+        return nodo.valor
+    if (isinstance(nodo, ast.UnaryOp) and nodo.op == '-'
+            and isinstance(nodo.expr, ast.Literal) and nodo.expr.tipo == I32):
+        return -nodo.expr.valor
+    return None
+
+
+def variable_raiz(nodo):
+    """a[i][j] -> el Identifier `a` (None si la base no es una variable)."""
+    while isinstance(nodo, ast.Index):
+        nodo = nodo.base
+    return nodo if isinstance(nodo, ast.Identifier) else None
 
 
 def contiene_return(nodo):

@@ -19,6 +19,8 @@ Convenciones del generador (importantes para entender todo el código):
     printf antes de salir.
 """
 from compiler import ast_nodes as ast
+from compiler.tipos import (es_arreglo, elemento, longitud, tipo_base,
+                            total_elementos, tamano)
 
 I32, F64, BOOL, CHAR, STRING = 'i32', 'f64', 'bool', 'char', 'String'
 ERROR = 'None'
@@ -187,7 +189,8 @@ class Arm64Generator:
             "// Generado por OxigenNative",
             "    .global main",
             "    // Funciones de la biblioteca de C que se usan",
-            "    .extern printf, snprintf, malloc, strlen, strcpy, strcat, strcmp",
+            "    .extern printf, snprintf, malloc, calloc, memcpy, strlen,",
+            "    .extern strcpy, strcat, strcmp, exit",
             "",
             "    .section .data",
             *self.data,
@@ -271,10 +274,28 @@ class Arm64Generator:
             tipo_valor = sym.tipo
         else:
             tipo_valor = self.visitar(nodo.valor)
+            self.copiar_si_es_variable(nodo.valor, tipo_valor)
         self.guardar_variable(sym, tipo_valor)
 
     def valor_por_defecto(self, tipo):
-        if tipo == F64:
+        if es_arreglo(tipo):
+            # calloc deja todo en 0: sirve para i32, f64 (0.0), bool y char
+            self.emit("mov x0, #1")
+            self.cargar_inmediato("x1", tamano(tipo))
+            self.emit("bl calloc", f"arreglo {tipo} lleno de ceros")
+            if tipo_base(tipo) == STRING:
+                # Los String por defecto son "" (no un puntero nulo)
+                ciclo, fin = self.nueva_etiqueta("vacios"), self.nueva_etiqueta("vacios_fin")
+                self.emit("mov x10, x0")
+                self.direccion("x11", self.cadena(""))
+                self.cargar_inmediato("x12", total_elementos(tipo))
+                self.etiqueta(ciclo)
+                self.emit(f"cbz x12, {fin}")
+                self.emit("str x11, [x10], #8", 'elemento = ""')
+                self.emit("sub x12, x12, #1")
+                self.emit(f"b {ciclo}")
+                self.etiqueta(fin)
+        elif tipo == F64:
             self.emit("fmov d0, xzr", "0.0")
         elif tipo == STRING:
             self.direccion("x0", self.cadena(""))
@@ -285,10 +306,13 @@ class Arm64Generator:
 
     def visit_Assignment(self, nodo):
         sym = nodo.simbolo
+        if isinstance(nodo.objetivo, ast.Index):
+            return self.asignar_elemento(nodo)
         self.comentario(f"{sym.nombre} {nodo.op} ...  (línea {nodo.linea})")
 
         if nodo.op == '=':
             tipo_valor = self.visitar(nodo.valor)
+            self.copiar_si_es_variable(nodo.valor, tipo_valor)
             self.guardar_variable(sym, tipo_valor)
             return
 
@@ -434,6 +458,7 @@ class Arm64Generator:
         tipos = sym.tipos_params
         for arg, tipo_param in zip(nodo.args, tipos):
             tipo = self.visitar(arg)
+            self.copiar_si_es_variable(arg, tipo)   # los arreglos se pasan por copia
             if tipo_param == F64 and tipo == I32:
                 self.emit("scvtf d0, x0", "promoción del argumento i32 -> f64")
             self.push_valor(tipo_param)
@@ -462,6 +487,15 @@ class Arm64Generator:
             tipo = getattr(arg, 'tipo_resultado', ERROR) if arg else ERROR
             if tipo == ERROR:
                 texto += "None"         # resiliencia: valor inválido
+                continue
+            if es_arreglo(tipo):
+                self.visitar(arg)       # x0 = puntero al arreglo
+                if texto:
+                    self.push()
+                    self.printf(texto)
+                    self.pop("x0")
+                self.imprimir_arreglo(tipo)
+                texto = ""
                 continue
             self.visitar(arg)           # deja el valor en x0 o d0
             self.printf(texto + ESPECIFICADOR[tipo], tipo)
@@ -633,6 +667,246 @@ class Arm64Generator:
         self.etiqueta(fin)
         return BOOL
 
+
+
+    # ==================================================================
+    # Arreglos
+    # Todo arreglo es UN bloque contiguo en el heap (row-major) y la
+    # variable guarda el puntero. Cada valor básico ocupa 8 bytes.
+    # ==================================================================
+
+    def sumar_inmediato(self, destino, origen, valor):
+        """destino = origen + valor (valor puede no caber en un add)."""
+        if valor == 0:
+            if destino != origen:
+                self.emit(f"mov {destino}, {origen}")
+        elif valor < 4096:
+            self.emit(f"add {destino}, {origen}, #{valor}")
+        else:
+            self.cargar_inmediato("x12", valor)
+            self.emit(f"add {destino}, {origen}, x12")
+
+    def copiar_si_es_variable(self, nodo, tipo):
+        """Los arreglos se copian al asignarlos (como en Rust, `let b = a;`
+        crea un arreglo nuevo). Si el valor ya es un arreglo nuevo
+        (literal, slice, retorno de función) no hace falta copiar."""
+        if es_arreglo(tipo) and isinstance(nodo, (ast.Identifier, ast.Index)):
+            self.cargar_inmediato("x1", tamano(tipo))
+            self.llamar("__oxi_copiar")             # x0 = copia nueva
+
+    def visit_ArrayLiteral(self, nodo):
+        """[e1, e2, ...]: malloc del bloque completo y se guarda cada valor
+        en su posición. Los literales anidados ([[1, 2], [3, 4]]) se
+        escriben directo en el mismo bloque (aplanados)."""
+        tipo = nodo.tipo_resultado
+        self.comentario(f"arreglo {tipo}  (línea {nodo.linea})")
+        self.cargar_inmediato("x0", tamano(tipo))
+        self.emit("bl malloc", f"reservar {tamano(tipo)} bytes en el heap")
+        self.push()                                 # [sp] = bloque
+        self.llenar(nodo, tipo, 0)
+        self.pop("x0")                              # x0 = puntero al arreglo
+        return tipo
+
+    def llenar(self, nodo, tipo, desplazamiento):
+        tipo_elem = elemento(tipo)
+        paso = tamano(tipo_elem)
+        for k, e in enumerate(nodo.elementos):
+            pos = desplazamiento + k * paso
+            if es_arreglo(tipo_elem):
+                if isinstance(e, ast.ArrayLiteral):
+                    self.llenar(e, tipo_elem, pos)  # se aplana en el mismo bloque
+                    continue
+                self.visitar(e)                     # x0 = otro arreglo
+                self.emit("mov x1, x0", "origen")
+                self.emit("ldr x0, [sp]")
+                self.sumar_inmediato("x0", "x0", pos)
+                self.cargar_inmediato("x2", paso)
+                self.emit("bl memcpy", "copiar el sub-arreglo")
+            else:
+                t = self.visitar(e)
+                if tipo_elem == F64 and t == I32:
+                    self.emit("scvtf d0, x0")
+                self.emit("ldr x10, [sp]", "x10 = bloque")
+                self.sumar_inmediato("x10", "x10", pos)
+                reg = "d0" if tipo_elem == F64 else "x0"
+                self.emit(f"str {reg}, [x10]", f"elemento en el byte {pos}")
+
+    def visit_ArrayRepeat(self, nodo):
+        """[valor; N]: se evalúa el valor una vez y se copia N veces."""
+        tipo = nodo.tipo_resultado
+        tipo_elem = elemento(tipo)
+        paso = tamano(tipo_elem)
+        ciclo, fin = self.nueva_etiqueta("repetir"), self.nueva_etiqueta("repetir_fin")
+        self.comentario(f"arreglo {tipo} con [valor; {nodo.cantidad}]  (línea {nodo.linea})")
+        self.cargar_inmediato("x0", tamano(tipo))
+        self.emit("bl malloc")
+        self.push()                                 # [sp+32] = bloque
+        self.visitar(nodo.valor)
+        self.push_valor(tipo_elem)                  # [sp+16] = valor
+        self.emit("str xzr, [sp, #-16]!", "[sp] = i = 0")
+        self.etiqueta(ciclo)
+        self.emit("ldr x11, [sp]")
+        self.cargar_inmediato("x12", nodo.cantidad)
+        self.emit("cmp x11, x12")
+        self.emit(f"b.ge {fin}")
+        self.emit("ldr x10, [sp, #32]")
+        self.cargar_inmediato("x12", paso)
+        self.emit("madd x10, x11, x12, x10", "x10 = bloque + i * tamaño")
+        if es_arreglo(tipo_elem):
+            self.emit("mov x0, x10")
+            self.emit("ldr x1, [sp, #16]")
+            self.cargar_inmediato("x2", paso)
+            self.emit("bl memcpy")
+        else:
+            self.emit("ldr x0, [sp, #16]")
+            self.emit("str x0, [x10]")
+        self.emit("ldr x11, [sp]")
+        self.emit("add x11, x11, #1")
+        self.emit("str x11, [sp]")
+        self.emit(f"b {ciclo}")
+        self.etiqueta(fin)
+        self.emit("add sp, sp, #32", "quitar i y el valor")
+        self.pop("x0")
+        return tipo
+
+    def direccion_elemento(self, nodo):
+        """Deja en x0 la DIRECCIÓN de base[indice].
+        Para m[i][j] primero se calcula la dirección de la fila m[i] y
+        luego se le suma j:  base + (i * columnas + j) * 8  (row-major)."""
+        base = nodo.base
+        if isinstance(base, ast.Index):
+            self.direccion_elemento(base)           # dirección del sub-arreglo
+        else:
+            self.visitar(base)                      # puntero al arreglo
+        tipo_base_arr = base.tipo_resultado
+        n = longitud(tipo_base_arr)
+        paso = tamano(elemento(tipo_base_arr))
+
+        if nodo.indice_constante is not None:       # límites revisados al compilar
+            self.sumar_inmediato("x0", "x0", nodo.indice_constante * paso)
+            return
+
+        self.push()                                 # guardar la base
+        self.visitar(nodo.indice)                   # x0 = índice
+        ok = self.nueva_etiqueta("indice_ok")
+        self.cargar_inmediato("x12", n)
+        self.emit("cmp x0, x12")
+        # Comparación SIN signo: un índice negativo se ve como un número
+        # enorme, así una sola instrucción revisa 0 <= i < n.
+        self.emit(f"b.lo {ok}", f"0 <= índice < {n}")
+        self.emit("mov x2, x0")
+        self.cargar_inmediato("x3", n)
+        self.cargar_inmediato("x0", nodo.linea)
+        self.cargar_inmediato("x1", nodo.columna)
+        self.llamar("__oxi_fuera_limites")          # no regresa
+        self.etiqueta(ok)
+        self.pop("x1")                              # x1 = base
+        self.cargar_inmediato("x12", paso)
+        self.emit("madd x0, x0, x12, x1", "x0 = base + índice * tamaño")
+
+    def visit_Index(self, nodo):
+        self.direccion_elemento(nodo)
+        tipo = nodo.tipo_resultado
+        if es_arreglo(tipo):
+            return tipo                             # m[i] es la dirección de la fila
+        if tipo == F64:
+            self.emit("ldr d0, [x0]", "leer el elemento")
+        else:
+            self.emit("ldr x0, [x0]", "leer el elemento")
+        return tipo
+
+    def asignar_elemento(self, nodo):
+        """a[i] = v,  m[i][j] += v, ..."""
+        objetivo = nodo.objetivo
+        tipo_elem = objetivo.tipo_resultado
+        self.comentario(f"elemento {nodo.op} ...  (línea {nodo.linea})")
+        self.direccion_elemento(objetivo)
+        self.push()                                 # [sp] = dirección del elemento
+        if nodo.op == '=':
+            tipo_valor = self.visitar(nodo.valor)
+        else:
+            self.emit("ldr x0, [sp]")
+            if tipo_elem == F64:
+                self.emit("ldr d0, [x0]", "valor actual")
+            else:
+                self.emit("ldr x0, [x0]", "valor actual")
+            self.push_valor(tipo_elem)
+            tipo_valor = self.visitar(nodo.valor)
+            tipo_valor = self.aplicar(COMPUESTOS[nodo.op], tipo_elem, tipo_valor)
+        if tipo_elem == F64 and tipo_valor == I32:
+            self.emit("scvtf d0, x0", "promoción i32 -> f64")
+        self.pop("x10")                             # x10 = dirección
+        if es_arreglo(tipo_elem):                   # m[0] = [1, 2, 3]: copiar la fila
+            self.emit("mov x1, x0")
+            self.emit("mov x0, x10")
+            self.cargar_inmediato("x2", tamano(tipo_elem))
+            self.emit("bl memcpy")
+        elif tipo_elem == F64:
+            self.emit("str d0, [x10]", "guardar el elemento")
+        else:
+            self.emit("str x0, [x10]", "guardar el elemento")
+
+    def visit_Slice(self, nodo):
+        """&a[i..j]: arreglo nuevo con una copia de los elementos i..j-1."""
+        tipo_base_arr = nodo.base.tipo_resultado
+        paso = tamano(elemento(tipo_base_arr))
+        self.comentario(f"slice [{nodo.desde}..{nodo.hasta}]  (línea {nodo.linea})")
+        self.visitar(nodo.base)
+        self.sumar_inmediato("x0", "x0", nodo.desde * paso)
+        self.cargar_inmediato("x1", (nodo.hasta - nodo.desde) * paso)
+        self.llamar("__oxi_copiar")
+        return nodo.tipo_resultado
+
+    def visit_MethodCall(self, nodo):
+        """.len(): en un arreglo es una constante (el tamaño es parte del
+        tipo); en un String se calcula con strlen (cuenta bytes, igual
+        que Rust)."""
+        if es_arreglo(nodo.tipo_objeto):
+            self.cargar_inmediato("x0", longitud(nodo.tipo_objeto))
+        else:
+            self.visitar(nodo.objeto)
+            self.emit("bl strlen", "largo del String")
+        return I32
+
+    def imprimir_arreglo(self, tipo):
+        """Imprime el arreglo apuntado por x0 como [a, b, c] (las matrices
+        como [[1, 2], [3, 4]]). Usa un ciclo en ensamblador; el índice y
+        la base se guardan en la pila porque printf borra los registros."""
+        n = longitud(tipo)
+        tipo_elem = elemento(tipo)
+        paso = tamano(tipo_elem)
+        ciclo = self.nueva_etiqueta("imprimir")
+        fin = self.nueva_etiqueta("imprimir_fin")
+        sin_coma = self.nueva_etiqueta("sin_coma")
+
+        self.push()                                 # [sp+16] = base
+        self.emit("str xzr, [sp, #-16]!", "[sp] = i = 0")
+        self.printf("[")
+        self.etiqueta(ciclo)
+        self.emit("ldr x11, [sp]")
+        self.cargar_inmediato("x12", n)
+        self.emit("cmp x11, x12")
+        self.emit(f"b.ge {fin}")
+        self.emit(f"cbz x11, {sin_coma}", "antes del primero no va coma")
+        self.printf(", ")
+        self.etiqueta(sin_coma)
+        self.emit("ldr x11, [sp]")
+        self.emit("ldr x10, [sp, #16]")
+        self.cargar_inmediato("x12", paso)
+        self.emit("madd x0, x11, x12, x10", "x0 = dirección del elemento i")
+        if es_arreglo(tipo_elem):
+            self.imprimir_arreglo(tipo_elem)
+        else:
+            self.emit(f"ldr {'d0' if tipo_elem == F64 else 'x0'}, [x0]")
+            formato = {STRING: '"%s"', CHAR: "'%s'"}.get(tipo_elem, ESPECIFICADOR[tipo_elem])
+            self.printf(formato, tipo_elem)
+        self.emit("ldr x11, [sp]")
+        self.emit("add x11, x11, #1")
+        self.emit("str x11, [sp]", "i += 1")
+        self.emit(f"b {ciclo}")
+        self.etiqueta(fin)
+        self.printf("]")
+        self.emit("add sp, sp, #32", "quitar i y la base")
 
 
 def registros_parametros(tipos):
@@ -839,7 +1113,50 @@ __oxi_repetir:
 """
 
 
+def _rutina_copiar(gen):
+    return """
+// ---- __oxi_copiar: x0 = origen, x1 = bytes -> x0 = copia nueva en el heap ----
+__oxi_copiar:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    mov x19, x0                         // x19 = origen
+    mov x20, x1                         // x20 = bytes
+    mov x0, x20
+    bl malloc
+    mov x1, x19
+    mov x2, x20
+    bl memcpy                           // memcpy(nuevo, origen, bytes) -> x0 = nuevo
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+"""
+
+
+def _rutina_fuera_limites(gen):
+    mensaje = gen.cadena("\n[Error de ejecución] Línea %d, Columna %d: Índice fuera "
+                         "de los límites del arreglo (índice %d, longitud %d).\n")
+    return f"""
+// ---- __oxi_fuera_limites: x0 = línea, x1 = columna, x2 = índice, x3 = largo ----
+// Imprime el error y termina el programa con código 1.
+__oxi_fuera_limites:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x4, x3
+    mov x3, x2
+    mov x2, x1
+    mov x1, x0
+    adrp x0, {mensaje}
+    add x0, x0, :lo12:{mensaje}
+    bl printf
+    mov w0, #1
+    bl exit                             // exit vacía el búfer de printf
+"""
+
+
 RUTINAS = {
+    "__oxi_copiar": _rutina_copiar,
+    "__oxi_fuera_limites": _rutina_fuera_limites,
     "__oxi_f64_str": _rutina_f64_str,
     "__oxi_char_str": _rutina_char_str,
     "__oxi_concat": _rutina_concat,

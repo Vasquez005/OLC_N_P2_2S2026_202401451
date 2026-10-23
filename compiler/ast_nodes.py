@@ -11,6 +11,8 @@ Paso 3: asignaciones y println!.
 Paso 4: if / else if / else, while, loop, break y continue (con etiquetas).
 Paso 5: funciones con parámetros y tipo de retorno, return, llamadas y
         expresiones usadas como instrucción (por ejemplo `saludar(x);`).
+Paso 6: arreglos de N dimensiones: literales, repetición [v; N], acceso
+        por índice, slices &a[i..j] y métodos como .len().
 """
 
 
@@ -59,7 +61,7 @@ class Function(Node):
     def __init__(self, nombre, params, tipo_retorno, cuerpo, linea, columna):
         super().__init__(linea, columna)
         self.nombre = nombre
-        self.params = params            # list[Param]
+        self.params = params            # list[Param] (paso 5)
         self.tipo_retorno = tipo_retorno  # str o None si no retorna
         self.cuerpo = cuerpo            # Block
 
@@ -244,3 +246,56 @@ class Call(Node):
         super().__init__(linea, columna)
         self.nombre = nombre
         self.args = args            # list[Node]
+
+
+
+# ----------------------------------------------------------------------
+# Arreglos 
+# Los tipos de arreglo se escriben como texto: "[i32; 3]",
+# "[[f64; 2]; 4]"... (ver compiler/tipos.py).
+# ----------------------------------------------------------------------
+
+class ArrayLiteral(Node):
+    """[e1, e2, e3]  (puede anidarse: [[1, 2], [3, 4]])"""
+
+    def __init__(self, elementos, linea, columna):
+        super().__init__(linea, columna)
+        self.elementos = elementos  # list[Node]
+
+
+class ArrayRepeat(Node):
+    """[valor; N]  ->  arreglo de N copias de valor"""
+
+    def __init__(self, valor, cantidad, linea, columna):
+        super().__init__(linea, columna)
+        self.valor = valor
+        self.cantidad = cantidad    # int
+
+
+class Index(Node):
+    """base[indice]  (a[i][j] es Index(Index(a, i), j))"""
+
+    def __init__(self, base, indice, linea, columna):
+        super().__init__(linea, columna)
+        self.base = base
+        self.indice = indice
+
+
+class Slice(Node):
+    """&base[inicio..fin]  (fin no incluido)"""
+
+    def __init__(self, base, inicio, fin, linea, columna):
+        super().__init__(linea, columna)
+        self.base = base
+        self.inicio = inicio
+        self.fin = fin
+
+
+class MethodCall(Node):
+    """objeto.metodo(args)   por ejemplo numeros.len()"""
+
+    def __init__(self, objeto, metodo, args, linea, columna):
+        super().__init__(linea, columna)
+        self.objeto = objeto
+        self.metodo = metodo
+        self.args = args
