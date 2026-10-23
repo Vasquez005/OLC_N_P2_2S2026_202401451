@@ -2,7 +2,7 @@
     .global main
     // Funciones de la biblioteca de C que se usan
     .extern printf, snprintf, malloc, calloc, memcpy, strlen,
-    .extern strcpy, strcat, strcmp, exit
+    .extern strcpy, strcat, strcmp, exit, strstr, strncat, rand, srand, time
 
     .section .data
 str_0: .asciz "None\n"
@@ -21,6 +21,7 @@ str_10: .asciz "\n[Error de ejecuci\303\263n] L\303\255nea %d, Columna %d: \303\
     .balign 8
 buf_f64:  .skip 64                     // texto de un f64 al imprimir
 buf_char: .skip 8                      // texto UTF-8 de un char
+oxi_semilla: .skip 8                   // 1 si ya se inicializó random
 
     .section .text
 
@@ -90,14 +91,16 @@ main:
     add x0, x0, :lo12:str_1
     bl printf
     ldr x0, [sp], #16                   // pop x0
+    mov x1, #2
     str x0, [sp, #-16]!                 // push x0
+    str x1, [sp, #-16]!                 // push x1
     str xzr, [sp, #-16]!                // [sp] = i = 0
     adrp x0, str_2
     add x0, x0, :lo12:str_2
     bl printf
 .Limprimir_2:
     ldr x11, [sp]
-    mov x12, #2
+    ldr x12, [sp, #16]                  // largo
     cmp x11, x12
     b.ge .Limprimir_fin_3
     cbz x11, .Lsin_coma_4               // antes del primero no va coma
@@ -106,17 +109,19 @@ main:
     bl printf
 .Lsin_coma_4:
     ldr x11, [sp]
-    ldr x10, [sp, #16]
+    ldr x10, [sp, #32]                  // datos
     mov x12, #16
     madd x0, x11, x12, x10              // x0 = dirección del elemento i
+    mov x1, #2
     str x0, [sp, #-16]!                 // push x0
+    str x1, [sp, #-16]!                 // push x1
     str xzr, [sp, #-16]!                // [sp] = i = 0
     adrp x0, str_2
     add x0, x0, :lo12:str_2
     bl printf
 .Limprimir_5:
     ldr x11, [sp]
-    mov x12, #2
+    ldr x12, [sp, #16]                  // largo
     cmp x11, x12
     b.ge .Limprimir_fin_6
     cbz x11, .Lsin_coma_7               // antes del primero no va coma
@@ -125,7 +130,7 @@ main:
     bl printf
 .Lsin_coma_7:
     ldr x11, [sp]
-    ldr x10, [sp, #16]
+    ldr x10, [sp, #32]                  // datos
     mov x12, #8
     madd x0, x11, x12, x10              // x0 = dirección del elemento i
     ldr x0, [x0]
@@ -141,7 +146,7 @@ main:
     adrp x0, str_5
     add x0, x0, :lo12:str_5
     bl printf
-    add sp, sp, #32                     // quitar i y la base
+    add sp, sp, #48                     // quitar i, largo y datos
     ldr x11, [sp]
     add x11, x11, #1
     str x11, [sp]                       // i += 1
@@ -150,7 +155,7 @@ main:
     adrp x0, str_5
     add x0, x0, :lo12:str_5
     bl printf
-    add sp, sp, #32                     // quitar i y la base
+    add sp, sp, #48                     // quitar i, largo y datos
     adrp x0, str_6
     add x0, x0, :lo12:str_6
     bl printf
@@ -177,9 +182,9 @@ main:
     ldr x0, [x29, #-56]                 // x0 = i
     mov x12, #3
     cmp x0, x12
-    b.lo .Lindice_ok_10                 // 0 <= índice < 3
+    b.lo .Lindice_ok_10                 // 0 <= índice < largo
     mov x2, x0
-    mov x3, #3
+    mov x3, x12
     mov x0, #17
     mov x1, #41
     bl __oxi_fuera_limites

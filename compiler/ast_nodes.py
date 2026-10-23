@@ -13,6 +13,8 @@ Paso 5: funciones con parámetros y tipo de retorno, return, llamadas y
         expresiones usadas como instrucción (por ejemplo `saludar(x);`).
 Paso 6: arreglos de N dimensiones: literales, repetición [v; N], acceso
         por índice, slices &a[i..j] y métodos como .len().
+Paso 7: match con comodín _, métodos de String y de arreglos (incluido
+        split, que crea un arreglo dinámico), typeof, random y el ciclo for.
 """
 
 
@@ -166,6 +168,23 @@ class Loop(Node):
         self.etiqueta = etiqueta    # str o None
 
 
+class For(Node):
+    """for [mut] variable in inicio..fin { }     (rango; ..= incluye el fin)
+       for [mut] variable in arreglo { }         (recorre los elementos)"""
+
+    def __init__(self, variable, mutable, inicio, fin, inclusivo, iterable,
+                 cuerpo, etiqueta, linea, columna):
+        super().__init__(linea, columna)
+        self.variable = variable    # nombre (str)
+        self.mutable = mutable
+        self.inicio = inicio        # rango: expresiones de inicio y fin
+        self.fin = fin
+        self.inclusivo = inclusivo  # True para ..=
+        self.iterable = iterable    # arreglo (o None si es un rango)
+        self.cuerpo = cuerpo        # Block
+        self.etiqueta = etiqueta    # str o None
+
+
 class Break(Node):
     def __init__(self, etiqueta, linea, columna):
         super().__init__(linea, columna)
@@ -250,7 +269,7 @@ class Call(Node):
 
 
 # ----------------------------------------------------------------------
-# Arreglos 
+# Arreglos (paso 6)
 # Los tipos de arreglo se escriben como texto: "[i32; 3]",
 # "[[f64; 2]; 4]"... (ver compiler/tipos.py).
 # ----------------------------------------------------------------------
@@ -299,3 +318,27 @@ class MethodCall(Node):
         self.objeto = objeto
         self.metodo = metodo
         self.args = args
+
+
+
+# ----------------------------------------------------------------------
+# match (paso 7)
+# ----------------------------------------------------------------------
+
+class Match(Node):
+    """match valor { patron => cuerpo, ..., _ => cuerpo, }"""
+
+    def __init__(self, valor, brazos, linea, columna):
+        super().__init__(linea, columna)
+        self.valor = valor
+        self.brazos = brazos        # list[MatchArm]
+
+
+class MatchArm(Node):
+    """Un brazo del match. `patron` es un Literal, o None si es el comodín _."""
+
+    def __init__(self, patron, cuerpo, comodin, linea, columna):
+        super().__init__(linea, columna)
+        self.patron = patron
+        self.cuerpo = cuerpo        # Block o una instrucción
+        self.comodin = comodin      # bool

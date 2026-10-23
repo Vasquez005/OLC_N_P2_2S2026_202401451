@@ -13,6 +13,8 @@ Paso 5: funciones con parámetros y tipo de retorno, return, llamadas y
         expresiones como instrucción.
 Paso 6: arreglos: tipo [T; N], [a, b], [v; N], a[i][j], asignación a
         un elemento, &a[i..j] y métodos objeto.metodo(args).
+Paso 7: match con brazos `patron => instrucción,` o `patron => { ... }`,
+        ciclo for (rangos y arreglos) y tipos Vec<&str> / &str.
 
 Uso:
     from compiler.parser import Parser
@@ -148,6 +150,8 @@ class Parser:
                        | sentencia_if
                        | sentencia_while
                        | sentencia_loop
+                       | sentencia_match
+                       | sentencia_for
                        | sentencia_break SEMI
                        | sentencia_continue SEMI
                        | sentencia_return SEMI'''
@@ -211,6 +215,112 @@ class Parser:
         'sentencia_loop : LABEL COLON LOOP bloque'
         linea, col = self._pos(p, 1)
         p[0] = ast.Loop(p[4], p[1], linea, col)
+
+    # --- for -----------------------------------------------------------
+    #   for i in 0..10 { }      for i in 1..=n { }      for x in arreglo { }
+
+    def p_sentencia_for(self, p):
+        '''sentencia_for : FOR mut_opt ID IN iterable bloque
+                         | LABEL COLON FOR mut_opt ID IN iterable bloque'''
+        if len(p) == 7:
+            etiqueta, mut, var, iterable, cuerpo, pos = None, p[2], p[3], p[5], p[6], 1
+        else:
+            etiqueta, mut, var, iterable, cuerpo, pos = p[1], p[4], p[5], p[7], p[8], 1
+        linea, col = self._pos(p, pos)
+        if iterable[0] == 'rango':
+            _, inicio, fin, inclusivo = iterable
+            p[0] = ast.For(var, mut, inicio, fin, inclusivo, None, cuerpo, etiqueta, linea, col)
+        else:
+            p[0] = ast.For(var, mut, None, None, False, iterable[1], cuerpo, etiqueta,
+                           linea, col)
+
+    def p_iterable_rango(self, p):
+        '''iterable : expresion DOTDOT expresion
+                    | expresion DOTDOTEQ expresion'''
+        p[0] = ('rango', p[1], p[3], p[2] == '..=')
+
+    def p_iterable_arreglo(self, p):
+        'iterable : expresion'
+        p[0] = ('arreglo', p[1])
+
+    # --- match ---------------------------------------------------------
+    #   match x {
+    #       1 => println!("uno"),
+    #       2 => { ... }
+    #       _ => println!("otro"),
+    #   }
+    # La coma es obligatoria después de un brazo sin llaves, salvo en el
+    # último (como en Rust). Después de un bloque { } es opcional.
+
+    def p_sentencia_match(self, p):
+        '''sentencia_match : MATCH expresion LBRACE brazos RBRACE
+                           | MATCH expresion LBRACE brazos brazo_final RBRACE
+                           | MATCH expresion LBRACE brazo_final RBRACE'''
+        linea, col = self._pos(p, 1)
+        if len(p) == 6:
+            brazos = p[4] if isinstance(p[4], list) else [p[4]]
+        else:
+            brazos = p[4] + [p[5]]
+        p[0] = ast.Match(p[2], brazos, linea, col)
+
+    def p_brazos(self, p):
+        '''brazos : brazos brazo
+                  | brazo'''
+        p[0] = p[1] + [p[2]] if len(p) == 3 else [p[1]]
+
+    def p_brazo_bloque(self, p):
+        '''brazo : patron FATARROW bloque
+                 | patron FATARROW bloque COMMA'''
+        p[0] = self._brazo(p[1], p[3])
+
+    def p_brazo_simple(self, p):
+        'brazo : patron FATARROW instruccion_brazo COMMA'
+        p[0] = self._brazo(p[1], p[3])
+
+    def p_brazo_final(self, p):
+        'brazo_final : patron FATARROW instruccion_brazo'
+        p[0] = self._brazo(p[1], p[3])
+
+    def p_instruccion_brazo(self, p):
+        '''instruccion_brazo : impresion
+                             | asignacion
+                             | sentencia_break
+                             | sentencia_continue
+                             | sentencia_return'''
+        p[0] = p[1]
+
+    def p_instruccion_brazo_expresion(self, p):
+        'instruccion_brazo : expresion'
+        p[0] = ast.ExprStmt(p[1], p[1].linea, p[1].columna)
+
+    def p_patron(self, p):
+        '''patron : INT
+                  | FLOAT
+                  | CHAR
+                  | STRING
+                  | TRUE
+                  | FALSE'''
+        linea, col = self._pos(p, 1)
+        tipos = {'INT': 'i32', 'FLOAT': 'f64', 'CHAR': 'char', 'STRING': 'String',
+                 'TRUE': 'bool', 'FALSE': 'bool'}
+        tipo = tipos[p.slice[1].type]
+        valor = (p[1] == 'true') if tipo == 'bool' else p[1]
+        p[0] = ast.Literal(valor, tipo, linea, col)
+
+    def p_patron_negativo(self, p):
+        '''patron : MINUS INT
+                  | MINUS FLOAT'''
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Literal(-p[2], 'i32' if isinstance(p[2], int) else 'f64', linea, col)
+
+    def p_patron_comodin(self, p):
+        'patron : UNDERSCORE'
+        p[0] = '_'
+
+    def _brazo(self, patron, cuerpo):
+        if patron == '_':
+            return ast.MatchArm(None, cuerpo, True, cuerpo.linea, cuerpo.columna)
+        return ast.MatchArm(patron, cuerpo, False, patron.linea, patron.columna)
 
     # --- break / continue --------------------------------------------
     # El semántico revisará que estén dentro de un ciclo y que la
@@ -357,6 +467,23 @@ class Parser:
                 | T_CHAR
                 | T_STRING'''
         p[0] = p[1]
+
+    def p_tipo_vec(self, p):
+        'tipo : ID LT tipo GT'
+        # Vec<&str> / Vec<String>: arreglo dinámico (lo que devuelve split)
+        if p[1] != 'Vec':
+            self.errores.agregar(SINTACTICO, f"Tipo '{p[1]}' no reconocido.", *self._pos(p, 1))
+        elif p[3].startswith('['):
+            self.errores.agregar(SINTACTICO, "Vec solo puede contener valores simples "
+                                 "(i32, f64, bool, char o String).", *self._pos(p, 1))
+        p[0] = f"[{p[3]}]"
+
+    def p_tipo_str(self, p):
+        'tipo : AMP ID'
+        # &str se trata igual que String
+        if p[2] != 'str':
+            self.errores.agregar(SINTACTICO, f"Tipo '&{p[2]}' no reconocido.", *self._pos(p, 2))
+        p[0] = 'String'
 
     def p_tipo_arreglo(self, p):
         'tipo : LBRACKET tipo SEMI INT RBRACKET'

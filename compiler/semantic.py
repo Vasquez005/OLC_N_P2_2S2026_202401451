@@ -23,7 +23,8 @@ Uso:
 from compiler import ast_nodes as ast
 from compiler.errors import ErrorList, SEMANTICO
 from compiler.symbol_table import SymbolTable, VALOR_POR_DEFECTO, PARAMETRO, FUNCION
-from compiler.tipos import es_arreglo, elemento, longitud
+from compiler.tipos import (es_arreglo, es_dinamico, es_estatico, elemento,
+                            longitud, nombre_tipo)
 
 # ----------------------------------------------------------------------
 # Tipos
@@ -37,6 +38,9 @@ ERROR = 'None'
 # "Tipo" de una llamada a una función que no retorna nada. No puede
 # usarse como valor (por ejemplo en `let x = saludar();`).
 VOID = '()'
+
+# Funciones embebidas que se llaman sin punto (sección 3.3.13)
+FUNCIONES_EMBEBIDAS = {'typeof', 'random'}
 
 # Convención de llamadas AArch64: los primeros 8 argumentos enteros van
 # en x0-x7 y los primeros 8 f64 en d0-d7. No se soportan más.
@@ -121,7 +125,8 @@ class Semantic:
         como error para que el resto del análisis siga."""
         tipo = self.visitar(nodo)
         if tipo == VOID:
-            self.error(nodo, f"La función '{nodo.nombre}' no retorna ningún valor; "
+            nombre = getattr(nodo, 'nombre', None) or getattr(nodo, 'metodo', '?')
+            self.error(nodo, f"La función '{nombre}' no retorna ningún valor; "
                              f"no puede usarse como expresión.")
             nodo.tipo_resultado = ERROR
             return ERROR
@@ -370,6 +375,42 @@ class Semantic:
         self.visitar_bloque(nodo.cuerpo, 'loop')
         self.ciclos.pop()
 
+    def visit_For(self, nodo):
+        """for i in a..b  /  for i in a..=b  (a y b de tipo i32)
+           for x in arreglo                  (x toma cada elemento)
+        La variable del ciclo vive en un ámbito propio y es inmutable
+        (salvo `for mut x`), como en Rust."""
+        self.revisar_etiqueta_nueva(nodo)
+        valido = True
+        if nodo.iterable is None:
+            for limite in (nodo.inicio, nodo.fin):
+                t = self.valor(limite)
+                if t == ERROR:
+                    valido = False
+                elif t != I32:
+                    self.error(limite, f"Los límites de un rango deben ser de tipo i32, "
+                                       f"pero este es de tipo {t}.")
+                    valido = False
+            tipo_variable = I32
+        else:
+            t = self.valor(nodo.iterable)
+            tipo_variable = ERROR
+            if t != ERROR and not es_arreglo(t):
+                self.error(nodo.iterable, f"Con for solo se puede recorrer un rango (a..b) "
+                                          f"o un arreglo, no un valor de tipo {t}.")
+            elif t != ERROR:
+                tipo_variable = elemento(t)
+            valido = tipo_variable != ERROR
+        nodo.omitir = not valido
+
+        self.tabla.abrir_scope('for')
+        nodo.simbolo = self.tabla.declarar_variable(
+            nodo.variable, tipo_variable, nodo.mutable, nodo.linea, nodo.columna)
+        self.ciclos.append(nodo.etiqueta)
+        self.visitar_instrucciones(nodo.cuerpo)
+        self.ciclos.pop()
+        self.tabla.cerrar_scope()
+
     def revisar_etiqueta_nueva(self, nodo):
         if nodo.etiqueta is not None and nodo.etiqueta in self.ciclos:
             self.error(nodo, f"La etiqueta '{nodo.etiqueta} ya está en uso "
@@ -468,6 +509,8 @@ class Semantic:
         nodo.tipo_resultado = ERROR
 
         sym = self.tabla.global_scope.buscar_local(nodo.nombre)
+        if sym is None and nodo.nombre in FUNCIONES_EMBEBIDAS:
+            return self.funcion_embebida(nodo, tipos_args)
         if sym is None or sym.categoria != FUNCION:
             self.error(nodo, f"La función '{nodo.nombre}' no ha sido declarada.")
             return ERROR
@@ -545,10 +588,14 @@ class Semantic:
             return ERROR
         constante = constante_entera(nodo.indice)
         if constante is not None:
-            if not 0 <= constante < longitud(tipo_base):
+            # En un arreglo dinámico solo se puede descartar un negativo;
+            # el máximo se revisa al ejecutar contra el largo guardado.
+            maximo = longitud(tipo_base) if es_estatico(tipo_base) else None
+            if constante < 0 or (maximo is not None and constante >= maximo):
                 self.error(nodo, "Índice fuera de los límites del arreglo.")
                 return ERROR
-            nodo.indice_constante = constante
+            if maximo is not None:
+                nodo.indice_constante = constante
         nodo.tipo_resultado = elemento(tipo_base)
         return nodo.tipo_resultado
 
@@ -569,29 +616,144 @@ class Semantic:
         if desde is None or hasta is None:
             self.error(nodo, "Los límites de un slice deben ser números enteros constantes.")
             return ERROR
-        if not 0 <= desde <= hasta <= longitud(tipo_base):
+        maximo = longitud(tipo_base) if es_estatico(tipo_base) else hasta
+        if not 0 <= desde <= hasta <= maximo:
             self.error(nodo, "Índice fuera de los límites del arreglo.")
             return ERROR
         nodo.desde, nodo.hasta = desde, hasta
-        nodo.tipo_resultado = f"[{elemento(tipo_base)}; {hasta - desde}]"
+        if es_dinamico(tipo_base):
+            # el fin se revisa al ejecutar; el resultado también es dinámico
+            nodo.tipo_resultado = tipo_base
+        else:
+            nodo.tipo_resultado = f"[{elemento(tipo_base)}; {hasta - desde}]"
         return nodo.tipo_resultado
 
     def visit_MethodCall(self, nodo):
-        """Por ahora: .len() para arreglos y String."""
+        """Funciones embebidas que se llaman con punto (sección 3.3.13):
+
+            String:   len()  contains(s)  replace(a, b)
+                      to_uppercase()  to_lowercase()
+            Arreglo:  len()  contains(v)  reverse()
+        """
         tipo_objeto = self.valor(nodo.objeto)
-        for arg in nodo.args:
-            self.valor(arg)
+        tipos_args = [self.valor(arg) for arg in nodo.args]
         nodo.tipo_objeto = tipo_objeto
         nodo.tipo_resultado = ERROR
-        if tipo_objeto == ERROR:
+        if tipo_objeto == ERROR or ERROR in tipos_args:
             return ERROR
-        if nodo.metodo == 'len' and not nodo.args and (es_arreglo(tipo_objeto)
-                                                        or tipo_objeto == STRING):
-            nodo.tipo_resultado = I32
-            return I32
-        self.error(nodo, f"El método '{nodo.metodo}' no existe para el tipo {tipo_objeto} "
-                         f"(o recibió argumentos incorrectos).")
-        return ERROR
+        m = nodo.metodo
+
+        if tipo_objeto == STRING:
+            firmas = {'len': ([], I32), 'contains': ([STRING], BOOL),
+                      'replace': ([STRING, STRING], STRING),
+                      'to_uppercase': ([], STRING), 'to_lowercase': ([], STRING),
+                      # split crea un arreglo dinámico "[String]" (Vec<&str>)
+                      'split': ([STRING], '[String]'),
+                      'split_whitespace': ([], '[String]')}
+        elif es_arreglo(tipo_objeto):
+            elem = elemento(tipo_objeto)
+            firmas = {'len': ([], I32), 'reverse': ([], VOID)}
+            if not es_arreglo(elem):
+                firmas['contains'] = ([elem], BOOL)
+            if es_dinamico(tipo_objeto):
+                # texto.split_whitespace().collect(): ya es un arreglo
+                firmas['collect'] = ([], tipo_objeto)
+        else:
+            firmas = {}
+
+        if m not in firmas:
+            self.error(nodo, f"El método '{m}' no existe para el tipo {tipo_objeto}.")
+            return ERROR
+        esperados, resultado = firmas[m]
+        if len(tipos_args) != len(esperados):
+            self.error(nodo, f"El método '{m}' esperaba {len(esperados)} argumentos, "
+                             f"pero recibió {len(tipos_args)}.")
+            return ERROR
+        for i, (esperado, recibido, arg) in enumerate(zip(esperados, tipos_args, nodo.args), 1):
+            if not asignable(esperado, recibido):
+                self.error(arg, f"El argumento {i} de '{m}' debe ser de tipo {esperado}, "
+                                f"pero es de tipo {recibido}.")
+                return ERROR
+
+        if m == 'reverse':
+            # reverse() modifica el arreglo: la variable debe ser mut
+            raiz = variable_raiz(nodo.objeto)
+            sym = getattr(raiz, 'simbolo', None) if raiz is not None else None
+            if sym is not None and not sym.mutable:
+                self.error(nodo, f"No es posible modificar la variable '{sym.nombre}' "
+                                 f"porque fue declarada como inmutable.")
+                return ERROR
+
+        nodo.tipo_resultado = resultado
+        return resultado
+
+    # ==================================================================
+    # Funciones embebidas globales: typeof(valor) y random(min, max)
+    # ==================================================================
+
+    def funcion_embebida(self, nodo, tipos_args):
+        nodo.embebida = nodo.nombre
+        if nodo.nombre == 'typeof':
+            if len(tipos_args) != 1:
+                self.error(nodo, f"La función 'typeof' esperaba 1 argumentos, "
+                                 f"pero recibió {len(tipos_args)}.")
+                return ERROR
+            if tipos_args[0] == ERROR:
+                return ERROR
+            nodo.texto_tipo = nombre_tipo(tipos_args[0])   # se conoce al compilar
+            nodo.tipo_resultado = STRING
+            return STRING
+        # random(min, max): entero al azar entre min y max (ambos incluidos)
+        if len(tipos_args) != 2:
+            self.error(nodo, f"La función 'random' esperaba 2 argumentos, "
+                             f"pero recibió {len(tipos_args)}.")
+            return ERROR
+        if ERROR in tipos_args:
+            return ERROR
+        for i, (t, arg) in enumerate(zip(tipos_args, nodo.args), 1):
+            if t != I32:
+                self.error(arg, f"El argumento {i} de 'random' debe ser de tipo i32, "
+                                f"pero es de tipo {t}.")
+                return ERROR
+        nodo.tipo_resultado = I32
+        return I32
+
+    # ==================================================================
+    # match (paso 7)
+    # ==================================================================
+
+    def visit_Match(self, nodo):
+        """Cada patrón debe poder compararse con el valor (mismas reglas que
+        ==) y debe existir el comodín _ como último brazo (sección 3.3.8)."""
+        tipo = self.valor(nodo.valor)
+        nodo.tipo_valor = tipo
+        nodo.omitir = tipo == ERROR
+        hay_comodin = False
+        for i, brazo in enumerate(nodo.brazos):
+            if brazo.comodin:
+                if hay_comodin:
+                    self.error(brazo, "El comodín '_' está repetido en el match.")
+                    nodo.omitir = True
+                elif i != len(nodo.brazos) - 1:
+                    self.error(brazo, "El comodín '_' debe ser el último brazo del match.")
+                    nodo.omitir = True
+                hay_comodin = True
+            else:
+                tipo_patron = self.valor(brazo.patron)
+                if tipo != ERROR and (tipo, tipo_patron) not in _COMPARABLES:
+                    self.error(brazo.patron, f"El patrón de tipo {tipo_patron} no se puede "
+                                             f"comparar con un valor de tipo {tipo}.")
+                    nodo.omitir = True
+            # Cada brazo tiene su propio ámbito
+            if isinstance(brazo.cuerpo, ast.Block):
+                self.visitar_bloque(brazo.cuerpo, 'match')
+            else:
+                self.tabla.abrir_scope('match')
+                self.visitar(brazo.cuerpo)
+                self.tabla.cerrar_scope()
+        if not hay_comodin:
+            self.error(nodo, "El match debe incluir el comodín '_' para los valores "
+                             "que no coincidan con ningún patrón.")
 
 
 def constante_entera(nodo):
