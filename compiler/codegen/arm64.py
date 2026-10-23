@@ -1,9 +1,9 @@
 """
-Generador de código ARM64
+Generador de código ARM64 (AArch64) para OxigenNative.
 
 Recorre el AST YA ANOTADO por el semántico y produce el texto de un
 archivo ensamblador (.s) para el ensamblador GNU, que se enlaza con
-la biblioteca de C (`gcc -static`) para poder usar printf
+la biblioteca de C (`gcc -static`) para poder usar printf.
 
 Convenciones del generador (importantes para entender todo el código):
 
@@ -26,17 +26,19 @@ ERROR = 'None'
 # Relacional -> condición de ARM64 para `cset` (después de un `cmp`)
 CONDICION = {'==': 'eq', '!=': 'ne', '<': 'lt', '>': 'gt', '<=': 'le', '>=': 'ge'}
 
-# Lo mismo despues de un `fcmp` (comparación de f64). Para < y <= se 
-# usa ´mi´ y ´ls´ en vez de ´lt´ y ´le´, porque el resultado de fcmp es
-# "menos" y "menor o igual" (mi/ls) en vez de "menor" y "menor o igual" (lt/le) como en enteros.
+# Lo mismo después de un `fcmp` (f64). Para < y <= se usan 'mi' y 'ls'
+# porque con NaN 'lt' y 'le' darían true, y cualquier comparación con
+# NaN debe ser false.
 CONDICION_F64 = {'==': 'eq', '!=': 'ne', '<': 'mi', '>': 'gt', '<=': 'ls', '>=': 'ge'}
 
-# Operador aritmetico -> instrucción de punto flotante
+# Operador aritmético -> instrucción de punto flotante
 OPERACION_F64 = {'+': 'fadd', '-': 'fsub', '*': 'fmul', '/': 'fdiv'}
 
 # Operador compuesto -> operador aritmético
 COMPUESTOS = {'+=': '+', '-=': '-', '*=': '*', '/=': '/', '%=': '%'}
 
+# Especificador de printf para cada tipo (ver visit_Print).
+# f64 y char se convierten antes a texto con una rutina de apoyo.
 ESPECIFICADOR = {
     I32: '%d',
     F64: '%s',      # __oxi_f64_str
@@ -44,7 +46,6 @@ ESPECIFICADOR = {
     CHAR: '%s',     # __oxi_char_str
     BOOL: '%s',     # se pasa el texto "true" o "false"
 }
-
 
 
 class Arm64Generator:
@@ -55,8 +56,12 @@ class Arm64Generator:
         self.cadenas = {}       # texto -> etiqueta (para no repetir cadenas)
         self.decimales = {}     # valor f64 -> etiqueta
         self.contador = 0       # para crear etiquetas únicas
-        self.ciclos = []           # pila de etiquetas de ciclos activos (break/continue)
-        self.rutinas = set()        # nombres de funciones auxiliares ya generadas
+        # Pila de ciclos activos. Cada elemento es un diccionario:
+        #   {'etiqueta': 'outer' o None,
+        #    'continuar': etiqueta ARM64 a la que salta `continue`,
+        #    'salir':     etiqueta ARM64 a la que salta `break`}
+        self.ciclos = []
+        self.rutinas = set()    # rutinas de apoyo que el programa usa
 
     # ==================================================================
     # Utilidades para emitir código
@@ -116,11 +121,12 @@ class Arm64Generator:
 
     # --- Pila de temporales ------------------------------------------
     # Para evaluar `a + b` hay que guardar el valor de `a` mientras se
-    # calcula `b`. Se guarda en la pila. Se mueven 16 bytes
- 
+    # calcula `b`. Se guarda en la pila. Se mueven 16 bytes (aunque el
+    # dato ocupe 8) porque ARM64 exige que sp sea múltiplo de 16.
+
     def push(self, reg="x0"):
         self.emit(f"str {reg}, [sp, #-16]!", f"push {reg}")
- 
+
     def pop(self, reg="x1"):
         self.emit(f"ldr {reg}, [sp], #16", f"pop {reg}")
 
@@ -131,7 +137,7 @@ class Arm64Generator:
     def llamar(self, rutina):
         """bl a una rutina de apoyo y la marca para agregarla al .s."""
         self.rutinas.add(rutina)
-        self.emit(f"bl {rutina}")    
+        self.emit(f"bl {rutina}")
 
     # --- Acceso a variables en la pila ---------------------------------
 
@@ -225,7 +231,18 @@ class Arm64Generator:
             self.emit(f"sub sp, sp, #{sym.tamano_frame}",
                       f"espacio para variables ({sym.tamano_frame} bytes)")
 
+        # Los argumentos llegan en registros (x0-x7 enteros, d0-d7 f64):
+        # se copian a su lugar en el marco para usarlos como variables.
+        for prm, reg in zip(sym.params, registros_parametros(sym.tipos_params)):
+            self.emit(f"str {reg}, {self._memoria(prm.offset)}",
+                      f"parámetro {prm.nombre} = {reg}")
+
+        self.tipo_retorno = nodo.tipo_retorno
         self.visit_Block(nodo.cuerpo)
+
+        # Si el cuerpo termina sin `return`, se retorna el valor por defecto
+        if nodo.nombre != 'main' and nodo.tipo_retorno is not None:
+            self.valor_por_defecto(nodo.tipo_retorno)
 
         # Epílogo
         self.etiqueta(self.fin_funcion)
@@ -265,7 +282,7 @@ class Arm64Generator:
             self.emit("mov x0, #0", "0 / false / '\\0'")
 
     # --- Asignaciones ------------------------------------------------------
- 
+
     def visit_Assignment(self, nodo):
         sym = nodo.simbolo
         self.comentario(f"{sym.nombre} {nodo.op} ...  (línea {nodo.linea})")
@@ -286,40 +303,39 @@ class Arm64Generator:
     # --- Control de flujo --------------------------------------------------
 
     def condicion_valida(self, nodo, sentencia):
-        """Si la condicion tuvo error semantic (no es bool), la sentencia 
-        completa se salta: no hay forma segura de decidir que rama recorrer"""
+        """Si la condición tuvo error semántico (no es bool), la sentencia
+        completa se salta: no hay forma segura de decidir qué rama correr."""
         if nodo.condicion.tipo_resultado == BOOL:
             return True
         self.comentario(f"{sentencia} omitido: condición inválida (línea {nodo.linea})")
         return False
 
     def visit_If(self, nodo):
-            """if c { A } else { B }   se traduce como
-    
-                    <evaluar c en x0>
-                    cbz x0, .Lif_sino      // c es false -> ir a B
-                    <A>
-                    b .Lif_fin
-                .Lif_sino:
-                    <B>                     // otro If si es `else if`
-                .Lif_fin:
-            """
-            if not self.condicion_valida(nodo, 'if'):
-                return
-            sino = self.nueva_etiqueta("if_sino")
-            fin = self.nueva_etiqueta("if_fin")
-    
-            self.comentario(f"if  (línea {nodo.linea})")
-            self.visitar(nodo.condicion)
-            self.emit(f"cbz x0, {sino if nodo.sino else fin}", "condición false -> saltar")
-            self.visit_Block(nodo.entonces)
-    
-            if nodo.sino is not None:
-                self.emit(f"b {fin}", "terminar el if")
-                self.etiqueta(sino)
-                self.visitar(nodo.sino)     # Block o If (else if)
-            self.etiqueta(fin)
+        """if c { A } else { B }   se traduce como
 
+                <evaluar c en x0>
+                cbz x0, .Lif_sino      // c es false -> ir a B
+                <A>
+                b .Lif_fin
+            .Lif_sino:
+                <B>                     // otro If si es `else if`
+            .Lif_fin:
+        """
+        if not self.condicion_valida(nodo, 'if'):
+            return
+        sino = self.nueva_etiqueta("if_sino")
+        fin = self.nueva_etiqueta("if_fin")
+
+        self.comentario(f"if  (línea {nodo.linea})")
+        self.visitar(nodo.condicion)
+        self.emit(f"cbz x0, {sino if nodo.sino else fin}", "condición false -> saltar")
+        self.visit_Block(nodo.entonces)
+
+        if nodo.sino is not None:
+            self.emit(f"b {fin}", "terminar el if")
+            self.etiqueta(sino)
+            self.visitar(nodo.sino)     # Block o If (else if)
+        self.etiqueta(fin)
 
     def visit_While(self, nodo):
         """while c { A }   se traduce como
@@ -343,7 +359,6 @@ class Arm64Generator:
         self.cuerpo_ciclo(nodo, continuar=inicio, salir=fin)
         self.emit(f"b {inicio}", "volver a evaluar la condición")
         self.etiqueta(fin)
-
 
     def visit_Loop(self, nodo):
         """loop { A }   se traduce como
@@ -388,7 +403,44 @@ class Arm64Generator:
         ciclo = self.buscar_ciclo(nodo.etiqueta)
         nombre = f" '{nodo.etiqueta}" if nodo.etiqueta else ""
         self.emit(f"b {ciclo['continuar']}", f"continue{nombre}  (línea {nodo.linea})")
-                        
+
+    # --- Funciones: return, llamadas e instrucciones-expresión -------------
+
+    def visit_Return(self, nodo):
+        """return v;  ->  v queda en x0 (o d0 si es f64) y se salta al
+        epílogo de la función, que restaura el marco y hace `ret`."""
+        if nodo.valor is not None:
+            tipo = self.visitar(nodo.valor)
+            if self.tipo_retorno == F64 and tipo == I32:
+                self.emit("scvtf d0, x0", "promoción i32 -> f64 del retorno")
+        self.emit(f"b {self.fin_funcion}", f"return  (línea {nodo.linea})")
+
+    def visit_ExprStmt(self, nodo):
+        self.visitar(nodo.expr)     # el resultado (x0/d0) simplemente se ignora
+
+    def visit_Call(self, nodo):
+        """f(a, b, c) se traduce como
+
+            <evaluar a> ; push      // se evalúan todos primero porque
+            <evaluar b> ; push      // evaluar uno puede llamar a otra
+            <evaluar c> ; push      // función y borrar x0-x7
+            pop -> registro de c    // luego se sacan en orden inverso
+            pop -> registro de b    // a su registro: x0..x7 o d0..d7
+            pop -> registro de a
+            bl fn_f                 // el resultado vuelve en x0 o d0
+        """
+        sym = nodo.simbolo
+        self.comentario(f"llamada a {nodo.nombre}()  (línea {nodo.linea})")
+        tipos = sym.tipos_params
+        for arg, tipo_param in zip(nodo.args, tipos):
+            tipo = self.visitar(arg)
+            if tipo_param == F64 and tipo == I32:
+                self.emit("scvtf d0, x0", "promoción del argumento i32 -> f64")
+            self.push_valor(tipo_param)
+        for reg in reversed(registros_parametros(tipos)):
+            self.pop(reg)
+        self.emit(f"bl fn_{nodo.nombre}")
+        return nodo.tipo_resultado
 
     # --- println! ----------------------------------------------------------
 
@@ -424,9 +476,14 @@ class Arm64Generator:
             self.direccion("x2", self.cadena("false"))
             self.emit("cmp x0, #0")
             self.emit("csel x1, x1, x2, ne", "x1 = texto del bool")
-        elif tipo in (I32, CHAR, STRING):
+        elif tipo == F64:
+            self.llamar("__oxi_f64_str")            # x0 = texto del decimal
             self.emit("mov x1, x0", "x1 = valor a imprimir")
-        # f64: el valor ya está en d0, que es donde printf lo espera
+        elif tipo == CHAR:
+            self.llamar("__oxi_char_str")           # x0 = texto UTF-8
+            self.emit("mov x1, x0", "x1 = valor a imprimir")
+        elif tipo in (I32, STRING):
+            self.emit("mov x1, x0", "x1 = valor a imprimir")
         self.direccion("x0", self.cadena(formato))
         self.emit("bl printf")
 
@@ -454,23 +511,21 @@ class Arm64Generator:
         self.cargar_variable(nodo.simbolo)
         return nodo.tipo_resultado
 
-
     # --- Operaciones unarias ----------------------------------------------
- 
+
     def visit_UnaryOp(self, nodo):
         tipo = self.visitar(nodo.expr)
         if nodo.op == '!':
             self.emit("eor x0, x0, #1", "!x  (1 -> 0, 0 -> 1)")
-        elif tipo == I32:
+        elif tipo == F64:
+            self.emit("fneg d0, d0", "-x (f64)")
+        else:
             self.emit("neg w0, w0", "-x")
             self.emit("sxtw x0, w0", "extender el signo a 64 bits")
-        else:
-            raise NotImplementedError(
-                f"El negativo de un {tipo} se agrega en G4 (línea {nodo.linea})")
         return nodo.tipo_resultado
 
     # --- Operaciones binarias ---------------------------------------------
- 
+
     def visit_BinaryOp(self, nodo):
         op = nodo.op
 
@@ -487,7 +542,8 @@ class Arm64Generator:
     def aplicar(self, op, tipo_izq, tipo_der):
         """Aplica `izq op der`. Al entrar, der está en x0/d0 y izq en el
         tope de la pila. Deja el resultado en x0/d0 y devuelve su tipo.
-        """
+        Se elige el código según los tipos (las mismas tablas del
+        semántico): f64, String o enteros."""
 
         # ---- f64 (si cualquiera de los dos lo es, se opera en f64) ----
         if F64 in (tipo_izq, tipo_der):
@@ -545,8 +601,6 @@ class Arm64Generator:
         self.operar_enteros(op)
         return I32
 
-    
- 
     def operar_enteros(self, op):
         """x0 = x1 <op> x0 con aritmética de 32 bits (i32).
         Se usan los registros w (32 bits) para que un desbordamiento dé
@@ -579,8 +633,24 @@ class Arm64Generator:
         self.etiqueta(fin)
         return BOOL
 
- 
- 
+
+
+def registros_parametros(tipos):
+    """Registro de cada parámetro según la convención AArch64:
+    los enteros/punteros usan x0, x1, ... y los f64 usan d0, d1, ...
+    con contadores separados.  (i32, f64, i32) -> [x0, d0, x1]"""
+    enteros = decimales = 0
+    registros = []
+    for tipo in tipos:
+        if tipo == F64:
+            registros.append(f"d{decimales}")
+            decimales += 1
+        else:
+            registros.append(f"x{enteros}")
+            enteros += 1
+    return registros
+
+
 def escapar_asm(texto):
     """Convierte un texto a una cadena válida para .asciz.
     Los caracteres no ASCII (á, ñ, emojis) se escriben como bytes UTF-8
@@ -602,6 +672,13 @@ def escapar_asm(texto):
             partes.append(f"\\{byte:03o}")
     return ''.join(partes)
 
+
+# ======================================================================
+# Rutinas de apoyo en ensamblador
+# Cada una es una función normal de ARM64: recibe sus datos en x0/x1/d0
+# y devuelve el resultado en x0. Las que llaman a otras funciones
+# guardan x29/x30 y los registros x19-x22 que usan (callee-saved).
+# ======================================================================
 
 def _rutina_f64_str(gen):
     """d0 -> x0 = texto del decimal.

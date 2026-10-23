@@ -1,5 +1,5 @@
 """
-Analizador sintáctico de OxigenNative
+Analizador sintáctico de OxigenNative usando PLY (ply.yacc).
 
 Construye el AST definido en ast_nodes.py.
 
@@ -9,6 +9,8 @@ Paso 2: expresiones aritméticas, relacionales y lógicas con precedencia.
 Paso 3: asignaciones simples y compuestas, println!.
 Paso 4: if / else if / else, while, loop, break, continue y etiquetas.
         println! también acepta un solo valor sin formato: println!(x).
+Paso 5: funciones con parámetros y tipo de retorno, return, llamadas y
+        expresiones como instrucción.
 
 Uso:
     from compiler.parser import Parser
@@ -31,6 +33,8 @@ class Parser:
     #   left     -> a - b - c  se agrupa como (a - b) - c
     #   right    -> !!a        se agrupa como !(!a)
     #   nonassoc -> a < b < c  es un error de sintaxis (como en Rust)
+    # UMINUS no es un token real: solo se usa con %prec para que el
+    # menos unario (-x) tenga más prioridad que la resta (a - b).
     # ------------------------------------------------------------------
     precedence = (
         ('left', 'OR'),
@@ -85,12 +89,34 @@ class Parser:
         'funciones : funcion'
         p[0] = [p[1]]
 
-    # --- Funciones ------------------------------------------------------
+    # --- Funciones -------------------------------------------------------
+    #   fn nombre(a: i32, mut b: f64) -> tipo { ... }
+    #   fn nombre() { ... }                     (sin retorno)
 
     def p_funcion(self, p):
-        'funcion : FN ID LPAREN RPAREN bloque'
+        'funcion : FN ID LPAREN parametros_opt RPAREN retorno_opt bloque'
         linea, col = self._pos(p, 1)
-        p[0] = ast.Function(p[2], [], None, p[5], linea, col)
+        p[0] = ast.Function(p[2], p[4], p[6], p[7], linea, col)
+
+    def p_parametros_opt(self, p):
+        '''parametros_opt : parametros
+                          | empty'''
+        p[0] = p[1] if p[1] is not None else []
+
+    def p_parametros(self, p):
+        '''parametros : parametros COMMA parametro
+                      | parametro'''
+        p[0] = p[1] + [p[3]] if len(p) == 4 else [p[1]]
+
+    def p_parametro(self, p):
+        'parametro : mut_opt ID COLON tipo'
+        linea, col = self._pos(p, 2)
+        p[0] = ast.Param(p[2], p[4], p[1], linea, col)
+
+    def p_retorno_opt(self, p):
+        '''retorno_opt : ARROW tipo
+                       | empty'''
+        p[0] = p[2] if len(p) == 3 else None
 
     # --- Bloques -------------------------------------------------------
 
@@ -121,8 +147,20 @@ class Parser:
                        | sentencia_while
                        | sentencia_loop
                        | sentencia_break SEMI
-                       | sentencia_continue SEMI'''
+                       | sentencia_continue SEMI
+                       | sentencia_return SEMI'''
         p[0] = p[1]
+
+    def p_instruccion_expresion(self, p):
+        'instruccion : expresion SEMI'
+        # saludar(10);   flag && saludar(10);
+        p[0] = ast.ExprStmt(p[1], p[1].linea, p[1].columna)
+
+    def p_sentencia_return(self, p):
+        '''sentencia_return : RETURN expresion
+                            | RETURN'''
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Return(p[2] if len(p) == 3 else None, linea, col)
 
     def p_instruccion_vacia(self, p):
         'instruccion : SEMI'
@@ -304,7 +342,7 @@ class Parser:
             partes.append(''.join(actual))
         return partes
 
-    # --- Tipos -------------------------------------------------------------
+    # --- Tipos (los arreglos [T; N] se agregan en el paso 6) -----------
 
     def p_tipo(self, p):
         '''tipo : T_I32
@@ -410,6 +448,13 @@ class Parser:
         'primario : ID'
         linea, col = self._pos(p, 1)
         p[0] = ast.Identifier(p[1], linea, col)
+
+    def p_primario_llamada(self, p):
+        '''primario : ID LPAREN lista_expresiones RPAREN
+                    | ID LPAREN RPAREN'''
+        linea, col = self._pos(p, 1)
+        args = p[3] if len(p) == 5 else []
+        p[0] = ast.Call(p[1], args, linea, col)
 
     # --- Producción vacía ----------------------------------------------
 

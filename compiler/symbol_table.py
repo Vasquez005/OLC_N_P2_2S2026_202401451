@@ -1,5 +1,20 @@
 """
-Tabla de símbolos y manejo de ámbitos (scopes).
+Tabla de símbolos de OxigenNative.
+
+Guarda la información de cada identificador declarado (variables,
+parámetros y funciones) y maneja los ámbitos (scopes) anidados.
+
+Además decide DÓNDE vive cada variable en memoria: le asigna un
+`offset` dentro del marco de pila (stack frame) de su función. El
+generador de ARM64 solo lee ese número:
+
+        let a = 10;   ->  offset -8   ->  str x0, [x29, #-8]
+        let b = 20;   ->  offset -16  ->  str x0, [x29, #-16]
+
+Organización:
+    Symbol       un identificador (variable, parámetro o función)
+    Scope        un ámbito: diccionario nombre -> Symbol + puntero al padre
+    SymbolTable  la pila de ámbitos + lista de todos los símbolos (reporte)
 """
 
 # Cada valor ocupa 8 bytes en la pila: i32 y bool se guardan en un
@@ -11,7 +26,7 @@ VARIABLE = "Variable"
 PARAMETRO = "Parámetro"
 FUNCION = "Función"
 
-# Valores por defecto según la tabla de tipos 
+# Valores por defecto según la tabla de tipos
 VALOR_POR_DEFECTO = {
     'i32': 0,
     'f64': 0.0,
@@ -38,6 +53,7 @@ class Symbol:
 
         # Funciones
         self.params = []            # list[Symbol] de los parámetros
+        self.tipos_params = []      # tipos de los parámetros (para revisar llamadas)
         self.tamano_frame = 0       # bytes que reserva la función (múltiplo de 16)
 
     def valor_reporte(self):
@@ -156,7 +172,10 @@ class SymbolTable:
 
         Sombreado (shadowing): si ya existe una variable con ese nombre en
         el mismo ámbito, la nueva la reemplaza en el diccionario, pero
-        recibe su PROPIO espacio en la pila (puede ser de otro tipo). 
+        recibe su PROPIO espacio en la pila (puede ser de otro tipo). La
+        anterior sigue en `todos` para que aparezca en el reporte.
+
+        `tamano` permitirá reservar más espacio para arreglos
         """
         sym = Symbol(nombre, categoria, tipo, linea, columna,
                      self.actual.nombre, mutable, valor)
