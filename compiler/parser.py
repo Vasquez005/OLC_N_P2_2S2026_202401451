@@ -15,16 +15,49 @@ Paso 6: arreglos: tipo [T; N], [a, b], [v; N], a[i][j], asignación a
         un elemento, &a[i..j] y métodos objeto.metodo(args).
 Paso 7: match con brazos `patron => instrucción,` o `patron => { ... }`,
         ciclo for (rangos y arreglos) y tipos Vec<&str> / &str.
+Paso 8: recuperación de errores sintácticos (ver p_error):
+          * si falta ; ) ] o } se reporta "Se esperaba ';'." y se inserta,
+            así el análisis sigue sin perder la instrucción;
+          * cualquier otro error descarta tokens hasta el siguiente ; o }
+            (producciones con `error`) y el análisis continúa.
 
 Uso:
     from compiler.parser import Parser
     ast = Parser(errores).parse(codigo)
 """
+import ply.lex as lex
 import ply.yacc as yacc
 
 from compiler.lexer import Lexer
 from compiler.errors import ErrorList, SINTACTICO
 from compiler import ast_nodes as ast
+
+
+# Tokens que se pueden insertar si faltan, en orden de prioridad
+CIERRES = ('SEMI', 'RPAREN', 'RBRACKET', 'RBRACE')
+
+# Tokens con los que empieza un elemento de una lista o un patrón: si
+# aparecen donde se esperaba una coma, lo que falta es la coma.
+INICIO_ELEMENTO = {'ID', 'INT', 'FLOAT', 'STRING', 'CHAR', 'TRUE', 'FALSE',
+                   'LBRACKET', 'MINUS', 'NOT', 'T_STRING', 'AMP', 'UNDERSCORE', 'MUT'}
+
+SIMBOLO = {'SEMI': ';', 'RPAREN': ')', 'RBRACKET': ']', 'RBRACE': '}', 'COMMA': ','}
+
+# Delimitadores: cierre -> apertura
+PAREJAS = {'RPAREN': 'LPAREN', 'RBRACKET': 'LBRACKET', 'RBRACE': 'LBRACE'}
+CIERRE_DE = {v: k for k, v in PAREJAS.items()}
+
+# Nombre legible de cada token para los mensajes de error
+NOMBRES_TOKEN = {
+    'SEMI': "';'", 'COMMA': "','", 'COLON': "':'", 'DCOLON': "'::'", 'DOT': "'.'",
+    'LPAREN': "'('", 'RPAREN': "')'", 'LBRACE': "'{'", 'RBRACE': "'}'",
+    'LBRACKET': "'['", 'RBRACKET': "']'", 'ASSIGN': "'='", 'ARROW': "'->'",
+    'FATARROW': "'=>'", 'DOTDOT': "'..'", 'DOTDOTEQ': "'..='", 'AMP': "'&'",
+    'ID': 'un identificador', 'INT': 'un número entero', 'FLOAT': 'un número decimal',
+    'STRING': 'una cadena', 'CHAR': 'un carácter', 'LABEL': 'una etiqueta',
+    'T_I32': "'i32'", 'T_F64': "'f64'", 'T_BOOL': "'bool'", 'T_CHAR': "'char'",
+    'T_STRING': "'String'", 'IN': "'in'", 'FN': "'fn'", 'PRINTLN': "'println!'",
+}
 
 
 class Parser:
@@ -66,7 +99,51 @@ class Parser:
 
     def parse(self, codigo):
         self.lexer.input(codigo)
-        return self.parser.parse(lexer=self.lexer.lexer)
+        self.codigo = codigo
+        self.pendientes = []        # tokens que se devuelven después de uno insertado
+        self.anterior = None        # token anterior al actual
+        self.actual = None          # último token entregado al parser
+        self.insertados = set()     # para no insertar dos veces en el mismo lugar
+        self.eof_reportados = set() # cierres ya reportados al final del archivo
+        self.entregados = []        # tokens entregados al parser (para la pila de { ( [)
+        return self.parser.parse(lexer=self.lexer.lexer, tokenfunc=self._siguiente_token)
+
+    def _siguiente_token(self):
+        """Entrega los tokens al parser. Primero los que se devolvieron
+        después de insertar un token faltante; luego los del lexer.
+        Cada token guarda `_fin`: la posición justo después de él."""
+        if self.pendientes:
+            tok = self.pendientes.pop()
+        else:
+            tok = self.lexer.lexer.token()
+            if tok is not None:
+                tok._fin = self.lexer.lexer.lexpos
+        if tok is not None:
+            self._registrar(tok)
+        return tok
+
+    def _registrar(self, tok):
+        self.anterior, self.actual = self.actual, tok
+        self.entregados.append(tok)
+
+    def _abierto_mas_interno(self):
+        """(tipo, es_match) del ( [ { abierto más interno según los tokens
+        aceptados. es_match indica si esa { es la de un `match`."""
+        pila = []
+        match_pendiente = False
+        for t in self.entregados:
+            if t.type == 'MATCH':
+                match_pendiente = True
+            elif t.type in CIERRE_DE:
+                pila.append((t.type, t.type == 'LBRACE' and match_pendiente))
+                if t.type == 'LBRACE':
+                    match_pendiente = False
+            elif t.type in PAREJAS and any(a == PAREJAS[t.type] for a, _ in pila):
+                while pila and pila.pop()[0] != PAREJAS[t.type]:
+                    pass
+            elif t.type == 'SEMI':
+                match_pendiente = False
+        return pila[-1] if pila else (None, False)
 
     # ------------------------------------------------------------------
     # Utilidad: posición (línea, columna) del símbolo n de la producción
@@ -129,6 +206,12 @@ class Parser:
         linea, col = self._pos(p, 1)
         p[0] = ast.Block(p[2], linea, col)
 
+    def p_bloque_error(self, p):
+        'bloque : LBRACE error RBRACE'
+        # Recuperación: un error que no se pudo arreglar dentro del bloque
+        linea, col = self._pos(p, 1)
+        p[0] = ast.Block([], linea, col)
+
     def p_bloque_vacio(self, p):
         'bloque : LBRACE RBRACE'
         linea, col = self._pos(p, 1)
@@ -167,6 +250,11 @@ class Parser:
                             | RETURN'''
         linea, col = self._pos(p, 1)
         p[0] = ast.Return(p[2] if len(p) == 3 else None, linea, col)
+
+    def p_instruccion_error(self, p):
+        'instruccion : error SEMI'
+        # Recuperación en modo pánico: se descarta todo hasta el siguiente ';'
+        p[0] = None
 
     def p_instruccion_vacia(self, p):
         'instruccion : SEMI'
@@ -630,12 +718,97 @@ class Parser:
     # --- Errores sintácticos (recuperación completa en el paso 8) -------
 
     def p_error(self, tok):
+        """Se llama cuando el token `tok` no encaja (None = fin del archivo).
+
+        1) Si el parser esperaba un ; ) ] o } se reporta "Se esperaba ';'."
+           justo después del token anterior (como el enunciado, sección
+           3.5.1), se INSERTA ese token y `tok` se vuelve a entregar
+           después. El análisis sigue como si estuviera escrito.
+        2) Si no, se reporta el token inesperado (y qué se esperaba, si son
+           pocas opciones) y PLY entra en modo pánico: descarta tokens
+           hasta poder usar una regla con `error` (hasta un ; o un })."""
+        estado = self.parser.statestack[-1]
+        esperados = set(self.parser.action[estado].keys())
+        # `tok` todavía no fue aceptado: se saca de la lista de entregados
+        if tok is not None and self.entregados and self.entregados[-1] is tok:
+            self.entregados.pop()
+        # El token anterior al que causó el error
+        previo = self.entregados[-1] if self.entregados else None
+
+        candidatos = [c for c in CIERRES if c in esperados]
+        # Después de ; { o } la instrucción ya terminó: un ';' ahí solo sería
+        # una instrucción vacía, así que lo que falta es otra cosa (p. ej. '}').
+        if previo is not None and previo.type in ('SEMI', 'LBRACE', 'RBRACE'):
+            candidatos = [c for c in candidatos if c != 'SEMI']
+        # Si se puede cerrar el ( [ { abierto más interno, eso va primero
+        # (el parser LALR a veces "espera" ) y ] a la vez en el mismo estado).
+        abierto, en_match = self._abierto_mas_interno()
+        if abierto is not None and CIERRE_DE[abierto] in candidatos:
+            if 'SEMI' not in candidatos or abierto != 'LBRACE':
+                candidatos.remove(CIERRE_DE[abierto])
+                candidatos.insert(0, CIERRE_DE[abierto])
+        # Un cierre que no corresponde al delimitador abierto no se inserta
+        candidatos = [c for c in candidatos
+                      if c == 'SEMI' or (abierto is not None and c == CIERRE_DE[abierto])]
+        # Falta una coma: dentro de ( ) [ ] o de un match, el siguiente
+        # token empieza un elemento nuevo:  f(a b)   [1 2]   1 => x  2 => y
+        if (tok is not None and tok.type in INICIO_ELEMENTO and 'COMMA' in esperados
+                and (abierto in ('LPAREN', 'LBRACKET') or (abierto == 'LBRACE' and en_match))):
+            candidatos = ['COMMA']
+        cierre = candidatos[0] if candidatos else None
+        if cierre is not None and previo is not None:
+            clave = (tok.lexpos if tok is not None else ('fin', len(self.insertados)), cierre)
+            if clave not in self.insertados and len(self.insertados) < 500:
+                self.insertados.add(clave)
+                linea, col = self._despues_de(previo)
+                if tok is None:
+                    if cierre not in self.eof_reportados:    # una vez por tipo
+                        self.eof_reportados.add(cierre)
+                        self._error_esperado(cierre, linea, col)
+                else:
+                    self._error_esperado(cierre, linea, col)
+                    self.pendientes.append(tok)              # se entrega después
+                self.parser.errok()
+                nuevo = self._token_sintetico(cierre, previo)
+                self._registrar(nuevo)
+                return nuevo
+
+        # ---- Error general: se reporta y se recupera en modo pánico ----
         if tok is None:
-            linea = self.lexer.lexer.lineno
-            self.errores.agregar(SINTACTICO,
-                                 "Fin de archivo inesperado.", linea, 1)
+            linea, col = self._despues_de(previo) if previo is not None else (1, 1)
+            self.errores.agregar(SINTACTICO, "Fin de archivo inesperado.", linea, col)
             return
-        col = self.lexer.find_column(tok.lexpos)
-        self.errores.agregar(SINTACTICO,
-                             f"Token inesperado '{tok.value}'.",
-                             tok.lineno, col)
+        texto = self.codigo[tok.lexpos:getattr(tok, '_fin', tok.lexpos + 1)] or str(tok.value)
+        opciones = sorted({NOMBRES_TOKEN.get(e, f"'{e.lower()}'") for e in esperados
+                           if e not in ('error', '$end')})
+        if {'INT', 'ID', 'LPAREN'} <= esperados:
+            mensaje = f"Se esperaba una expresión, pero se encontró '{texto}'."
+        elif {'T_I32', 'T_F64', 'T_STRING'} <= esperados:
+            mensaje = f"Se esperaba un tipo (i32, f64, bool, char, String o [T; N]), " \
+                      f"pero se encontró '{texto}'."
+        elif 0 < len(opciones) <= 4:
+            lista = ', '.join(opciones[:-1]) + (' o ' if len(opciones) > 1 else '') + opciones[-1]
+            mensaje = f"Se esperaba {lista}, pero se encontró '{texto}'."
+        else:
+            mensaje = f"Token inesperado '{texto}'."
+        self.errores.agregar(SINTACTICO, mensaje, tok.lineno,
+                             self.lexer.find_column(tok.lexpos))
+
+    def _error_esperado(self, cierre, linea, columna):
+        self.errores.agregar(SINTACTICO, f"Se esperaba '{SIMBOLO[cierre]}'.", linea, columna)
+
+    def _despues_de(self, tok):
+        """(línea, columna) de la posición justo después de un token."""
+        pos = getattr(tok, '_fin', tok.lexpos)
+        return self.codigo.count('\n', 0, pos) + 1, self.lexer.find_column(pos)
+
+    def _token_sintetico(self, tipo, previo):
+        """Token insertado por la recuperación (no está en el código)."""
+        t = lex.LexToken()
+        t.type = tipo
+        t.value = SIMBOLO[tipo]
+        t.lexpos = getattr(previo, '_fin', previo.lexpos)
+        t.lineno = self.codigo.count('\n', 0, t.lexpos) + 1
+        t._fin = t.lexpos
+        t.lexer = self.lexer.lexer
+        return t
