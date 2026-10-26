@@ -31,15 +31,6 @@ fn main() {
     println!("x /= 4 -> {}", x);
     x %= 4;
     println!("x %= 4 -> {}", x);
-    x %= 5;
-    println!("x %= 5 -> {}", x);
-    x %= 6;
-    println!("x %= 6 -> {}", x);
-    x %= 7;
-    println!("x %= 7 -> {}", x);
-    x %= 8;
-    println!("x %= 8 -> {}", x);
-
 
     // Desbordamiento de i32 (da la vuelta)
     let maximo = 2147483647;

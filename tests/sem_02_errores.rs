@@ -17,6 +17,7 @@ fn main() {
     break;
     loop {
         continue 'nada;
+        break;
     }
     println!("{} {}", a);
     let neg = -true;

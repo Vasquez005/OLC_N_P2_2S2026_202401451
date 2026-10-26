@@ -98,7 +98,3 @@ fn main() {
     }
     println!("Fin");
 }
-
-"""md5sum compiler/codegen/arm64.py      # 621660bb1b740004c8ee1ae6796a9bfa
-python compilar.py tests/g3_control.rs
-python compilar.py tests/04_control.rs"""

@@ -192,7 +192,8 @@ class Arm64Generator:
             "    .global main",
             "    // Funciones de la biblioteca de C que se usan",
             "    .extern printf, snprintf, malloc, calloc, memcpy, strlen,",
-            "    .extern strcpy, strcat, strcmp, exit, strstr, strncat, rand, srand, time",
+            "    .extern strcpy, strcat, strcmp, exit, strstr, strncat, rand, srand, time,",
+            "    .extern setvbuf, stdout",
             "",
             "    .section .data",
             *self.data,
@@ -242,6 +243,18 @@ class Arm64Generator:
         for prm, reg in zip(sym.params, registros_parametros(sym.tipos_params)):
             self.emit(f"str {reg}, {self._memoria(prm.offset)}",
                       f"parámetro {prm.nombre} = {reg}")
+
+        if nodo.nombre == 'main':
+            # La salida se escribe línea por línea (no al final del programa):
+            # si la ejecución se corta (ciclo infinito, error de ejecución),
+            # no se pierde lo que ya se imprimió.
+            #   setvbuf(stdout, NULL, _IOLBF, 0)
+            self.emit("adrp x0, stdout")
+            self.emit("ldr x0, [x0, :lo12:stdout]", "x0 = stdout")
+            self.emit("mov x1, #0")
+            self.emit("mov x2, #1", "_IOLBF: vaciar en cada salto de línea")
+            self.emit("mov x3, #0")
+            self.emit("bl setvbuf")
 
         self.tipo_retorno = nodo.tipo_retorno
         self.visit_Block(nodo.cuerpo)
