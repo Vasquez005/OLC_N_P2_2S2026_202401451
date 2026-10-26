@@ -1,0 +1,62 @@
+digraph ast {
+
+    graph [fontname="Helvetica", fontsize=12, bgcolor="white", pad=0.3, nodesep=0.35, ranksep=0.5];
+    node  [fontname="Helvetica", fontsize=11];
+    edge  [fontname="Helvetica", fontsize=10, color="#475569", fontcolor="#475569"];
+
+    compound=true; rankdir=TB; newrank=true;
+    node [shape=plain];
+    "Node" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#cbd5e1"><b>Node  (clase base)</b></td></tr><tr><td align="left" balign="left">linea: int<br/>columna: int</td></tr><tr><td align="left" balign="left">+ hijos()<br/>+ pretty()</td></tr></table>>];
+    subgraph cluster_Estructura {
+        label="Estructura"; style="rounded"; color="#94a3b8"; fontsize=13;
+        "Program" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#e0e7ff"><b>Program</b></td></tr><tr><td align="left" balign="left">funciones</td></tr></table>>];
+        "Function" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#e0e7ff"><b>Function</b></td></tr><tr><td align="left" balign="left">nombre<br/>params<br/>tipo_retorno<br/>cuerpo</td></tr></table>>];
+        "Param" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#e0e7ff"><b>Param</b></td></tr><tr><td align="left" balign="left">nombre<br/>tipo<br/>mutable</td></tr></table>>];
+        "Block" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#e0e7ff"><b>Block</b></td></tr><tr><td align="left" balign="left">instrucciones</td></tr></table>>];
+    }
+    subgraph cluster_Instrucciones {
+        label="Instrucciones"; style="rounded"; color="#94a3b8"; fontsize=13;
+        "VarDecl" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#f1f5f9"><b>VarDecl</b></td></tr><tr><td align="left" balign="left">nombre<br/>mutable<br/>tipo<br/>valor</td></tr></table>>];
+        "Assignment" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#f1f5f9"><b>Assignment</b></td></tr><tr><td align="left" balign="left">objetivo<br/>op<br/>valor</td></tr></table>>];
+        "Print" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#f1f5f9"><b>Print</b></td></tr><tr><td align="left" balign="left">formato<br/>partes<br/>args</td></tr></table>>];
+        "ExprStmt" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#f1f5f9"><b>ExprStmt</b></td></tr><tr><td align="left" balign="left">expr</td></tr></table>>];
+        "Return" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#f1f5f9"><b>Return</b></td></tr><tr><td align="left" balign="left">valor</td></tr></table>>];
+    }
+    subgraph cluster_Control_de_flujo {
+        label="Control de flujo"; style="rounded"; color="#94a3b8"; fontsize=13;
+        "If" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>If</b></td></tr><tr><td align="left" balign="left">condicion<br/>entonces<br/>sino</td></tr></table>>];
+        "While" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>While</b></td></tr><tr><td align="left" balign="left">condicion<br/>cuerpo<br/>etiqueta</td></tr></table>>];
+        "Loop" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>Loop</b></td></tr><tr><td align="left" balign="left">cuerpo<br/>etiqueta</td></tr></table>>];
+        "For" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>For</b></td></tr><tr><td align="left" balign="left">variable<br/>mutable<br/>inicio<br/>fin<br/>inclusivo<br/>iterable<br/>cuerpo<br/>etiqueta</td></tr></table>>];
+        "Break" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>Break</b></td></tr><tr><td align="left" balign="left">etiqueta</td></tr></table>>];
+        "Continue" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>Continue</b></td></tr><tr><td align="left" balign="left">etiqueta</td></tr></table>>];
+        "Match" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>Match</b></td></tr><tr><td align="left" balign="left">valor<br/>brazos</td></tr></table>>];
+        "MatchArm" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>MatchArm</b></td></tr><tr><td align="left" balign="left">patron<br/>cuerpo<br/>comodin</td></tr></table>>];
+    }
+    subgraph cluster_Expresiones {
+        label="Expresiones"; style="rounded"; color="#94a3b8"; fontsize=13;
+        "Literal" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>Literal</b></td></tr><tr><td align="left" balign="left">valor<br/>tipo</td></tr></table>>];
+        "Identifier" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>Identifier</b></td></tr><tr><td align="left" balign="left">nombre</td></tr></table>>];
+        "BinaryOp" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>BinaryOp</b></td></tr><tr><td align="left" balign="left">op<br/>izq<br/>der</td></tr></table>>];
+        "UnaryOp" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>UnaryOp</b></td></tr><tr><td align="left" balign="left">op<br/>expr</td></tr></table>>];
+        "Call" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>Call</b></td></tr><tr><td align="left" balign="left">nombre<br/>args</td></tr></table>>];
+        "MethodCall" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>MethodCall</b></td></tr><tr><td align="left" balign="left">objeto<br/>metodo<br/>args</td></tr></table>>];
+    }
+    subgraph cluster_Arreglos {
+        label="Arreglos"; style="rounded"; color="#94a3b8"; fontsize=13;
+        "ArrayLiteral" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fce7f3"><b>ArrayLiteral</b></td></tr><tr><td align="left" balign="left">elementos</td></tr></table>>];
+        "ArrayRepeat" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fce7f3"><b>ArrayRepeat</b></td></tr><tr><td align="left" balign="left">valor<br/>cantidad</td></tr></table>>];
+        "Index" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fce7f3"><b>Index</b></td></tr><tr><td align="left" balign="left">base<br/>indice</td></tr></table>>];
+        "Slice" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fce7f3"><b>Slice</b></td></tr><tr><td align="left" balign="left">base<br/>inicio<br/>fin</td></tr></table>>];
+    }
+    { rank=same; "Program" "Function" "Param" "Block" "VarDecl" "Assignment" "Print" "ExprStmt" "Return" }
+    { rank=same; "If" "While" "Loop" "For" "Break" "Continue" "Match" "MatchArm" }
+    "Program" -> "If" [style=invis, weight=10];
+    { rank=same; "Literal" "Identifier" "BinaryOp" "UnaryOp" "Call" "MethodCall" "ArrayLiteral" "ArrayRepeat" "Index" "Slice" }
+    "If" -> "Literal" [style=invis, weight=10];
+    "Node" -> "Param" [lhead=cluster_Estructura, dir=back, arrowtail=empty, label="hereda de Node", minlen=2];
+    "Node" -> "Print" [lhead=cluster_Instrucciones, dir=back, arrowtail=empty, label="hereda de Node", minlen=2];
+    "Node" -> "Break" [lhead=cluster_Control_de_flujo, dir=back, arrowtail=empty, label="hereda de Node", minlen=2];
+    "Node" -> "UnaryOp" [lhead=cluster_Expresiones, dir=back, arrowtail=empty, label="hereda de Node", minlen=2];
+    "Node" -> "Index" [lhead=cluster_Arreglos, dir=back, arrowtail=empty, label="hereda de Node", minlen=2];
+}

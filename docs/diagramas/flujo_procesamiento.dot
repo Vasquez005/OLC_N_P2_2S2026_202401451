@@ -1,0 +1,25 @@
+digraph flujo {
+
+    graph [fontname="Helvetica", fontsize=12, bgcolor="white", pad=0.3, nodesep=0.35, ranksep=0.5];
+    node  [fontname="Helvetica", fontsize=11];
+    edge  [fontname="Helvetica", fontsize=10, color="#475569", fontcolor="#475569"];
+
+    node [shape=box, style="rounded,filled", fillcolor="#f8fafc", color="#64748b"];
+
+    inicio  [label="Código fuente OxigenNative (.rs)", shape=note, fillcolor="#fef9c3"];
+    lexer   [label="Análisis léxico — compiler/lexer.py\ntokens con línea y columna\nerrores léxicos (carácter no reconocido, cadena sin cerrar...)"];
+    parser  [label="Análisis sintáctico — compiler/parser.py\nconstruye el AST (compiler/ast_nodes.py)\nrecuperación: inserta ; ) ] } , faltantes o descarta hasta ; }"];
+    sem     [label="Análisis semántico — compiler/semantic.py\n1ª pasada: registra funciones · 2ª pasada: cuerpos\nllena la tabla de símbolos (ámbitos, offsets, marcos)\nanota tipo_resultado y simbolo en cada nodo"];
+    dec     [label="¿Errores léxicos\no sintácticos?", shape=diamond, fillcolor="#fee2e2"];
+    gen     [label="Generación ARM64 — compiler/codegen/arm64.py\nvisitor: prólogo/epílogo, x0/d0, push/pop, etiquetas\nlas partes con error semántico se omiten o imprimen None"];
+    gcc     [label="Ensamblado y enlace — compiler/runner.py\ngcc -static programa.s -o programa"];
+    qemu    [label="Ejecución — qemu-aarch64 ./programa\n(límite de 5 s)"];
+    rep     [label="Reportes — compiler/reports.py\nerrores.html · tabla_simbolos.html · ast.dot/.svg", fillcolor="#e0e7ff"];
+    resp    [label="Respuesta JSON a la interfaz\nsalida · asm · errores · tabla · AST · tiempos", shape=note, fillcolor="#dcfce7"];
+
+    inicio -> lexer -> parser -> sem -> dec;
+    dec -> gen [label="no"];
+    dec -> rep [label="sí: no se genera código"];
+    gen -> gcc -> qemu -> rep;
+    rep -> resp;
+}

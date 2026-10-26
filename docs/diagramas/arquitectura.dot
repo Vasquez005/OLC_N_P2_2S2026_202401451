@@ -1,0 +1,46 @@
+digraph arquitectura {
+
+    graph [fontname="Helvetica", fontsize=12, bgcolor="white", pad=0.3, nodesep=0.35, ranksep=0.5];
+    node  [fontname="Helvetica", fontsize=11];
+    edge  [fontname="Helvetica", fontsize=10, color="#475569", fontcolor="#475569"];
+
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fillcolor="#f8fafc", color="#64748b"];
+
+    subgraph cluster_cliente {
+        label="1. Capa de presentación (navegador)"; style="rounded,dashed"; color="#94a3b8";
+        ui [label="Interfaz web\nindex.html · app.css · app.js\n\neditor · consola · ARM64 · reportes", fillcolor="#e0f2fe"];
+    }
+
+    subgraph cluster_servidor {
+        label="Servidor Linux (monolito Django)"; style="rounded"; color="#64748b";
+
+        api [label="2. Capa de lógica y servicios\nAPI REST (backend/api/views.py)\nPOST /api/compilar → JSON", fillcolor="#ede9fe"];
+
+        subgraph cluster_lenguaje {
+            label="3. Definición e implementación del lenguaje"; style="rounded"; color="#a78bfa";
+            lex [label="Lexer\n(PLY lex)", fillcolor="#f5f3ff"];
+            par [label="Parser\n(PLY yacc)", fillcolor="#f5f3ff"];
+            sem [label="Análisis semántico\n+ tabla de símbolos", fillcolor="#f5f3ff"];
+            gen [label="Generador ARM64\n(visitor)", fillcolor="#f5f3ff"];
+            rep [label="Reportes\n(HTML · Graphviz)", fillcolor="#f5f3ff"];
+        }
+
+        subgraph cluster_arm {
+            label="4. Entorno ARM64"; style="rounded"; color="#22c55e";
+            gcc [label="gcc -static\n(ensamblar + enlazar)", fillcolor="#dcfce7"];
+            qemu [label="qemu-aarch64\n(QEMU user mode)", fillcolor="#dcfce7"];
+        }
+    }
+
+    ui -> api [label="HTTP POST\n{codigo}"];
+    api -> ui [label="JSON: salida, asm,\nerrores, tabla, AST"];
+    api -> lex;
+    lex -> par [label="tokens"];
+    par -> sem [label="AST"];
+    sem -> gen [label="AST anotado"];
+    gen -> gcc [label=".s"];
+    gcc -> qemu [label="ELF ARM64"];
+    qemu -> api [label="stdout"];
+    sem -> rep [style=dashed, label="errores, tabla, AST"];
+}

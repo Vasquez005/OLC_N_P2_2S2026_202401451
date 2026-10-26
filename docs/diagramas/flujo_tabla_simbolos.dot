@@ -1,0 +1,29 @@
+digraph tabla {
+
+    graph [fontname="Helvetica", fontsize=12, bgcolor="white", pad=0.3, nodesep=0.35, ranksep=0.5];
+    node  [fontname="Helvetica", fontsize=11];
+    edge  [fontname="Helvetica", fontsize=10, color="#475569", fontcolor="#475569"];
+
+    node [shape=box, style="rounded,filled", fillcolor="#f8fafc", color="#64748b"];
+
+    p1  [label="Primera pasada (visit_Program)\ndeclarar_funcion() de TODAS las funciones en el ámbito Global\n(guarda tipo de retorno y tipos de parámetros)"];
+    f   [label="Por cada función: entrar_funcion()\nabre el ámbito de la función y reinicia el marco (0 bytes)"];
+    prm [label="Parámetros: declarar_variable(categoria=Parámetro)\noffset -8, -16, ...  (llegan en x0-x7 / d0-d7)"];
+    ins [label="Recorrer instrucciones del cuerpo", shape=box];
+    let [label="let x = ...\n1) se analiza el valor (así let x = x + 1 usa la x anterior)\n2) declarar_variable(): nuevo Symbol con offset = -(bytes usados + 8)\n   (sombreado: el nuevo reemplaza al anterior en el ámbito)"];
+    blq [label="Bloque if / while / loop / for / match\nabrir_scope('main > if') ... cerrar_scope()\n(la memoria sigue en el marco de la función)"];
+    uso [label="Uso de x: buscar('x')\nsube por los ámbitos padre hasta encontrarla\nIdentifier.simbolo = Symbol (el generador lee su offset)"];
+    err [label="No encontrada → error semántico\n\"La variable 'x' no ha sido declarada.\"", fillcolor="#fee2e2"];
+    fin [label="salir_funcion()\ntamano_frame = bytes usados redondeado a 16\n(el generador hace sub sp, sp, #tamano_frame)"];
+    rep [label="tabla.reporte(): una fila por símbolo\nNo · Identificador · Categoría · Tipo · Ámbito · Línea · Columna · Valor", fillcolor="#e0e7ff"];
+
+    p1 -> f -> prm -> ins;
+    ins -> let [label="declaración"];
+    ins -> blq [label="bloque"];
+    ins -> uso [label="expresión"];
+    uso -> err [label="no existe", style=dashed];
+    let -> ins; blq -> ins; uso -> ins;
+    ins -> fin [label="fin del cuerpo"];
+    fin -> f [label="siguiente función", style=dashed];
+    fin -> rep;
+}

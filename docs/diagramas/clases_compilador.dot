@@ -1,0 +1,40 @@
+digraph clases {
+
+    graph [fontname="Helvetica", fontsize=12, bgcolor="white", pad=0.3, nodesep=0.35, ranksep=0.5];
+    node  [fontname="Helvetica", fontsize=11];
+    edge  [fontname="Helvetica", fontsize=10, color="#475569", fontcolor="#475569"];
+
+    node [shape=plain];
+    rankdir=TB;
+    "Lexer" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#e0e7ff"><b>Lexer</b></td></tr><tr><td align="left" balign="left">reserved: dict<br/>tokens: list<br/>errores: ErrorList</td></tr><tr><td align="left" balign="left">+ build()<br/>+ find_column()<br/>+ input()<br/>+ tokenize()<br/>+ t_*()  [reglas de tokens]</td></tr></table>>];
+    "Parser" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#e0e7ff"><b>Parser</b></td></tr><tr><td align="left" balign="left">tokens = Lexer.tokens<br/>precedence: tuple<br/>errores: ErrorList<br/>lexer: Lexer</td></tr><tr><td align="left" balign="left">+ parse()<br/>+ p_*()  [reglas de la gramática]<br/>+ p_error(tok)</td></tr></table>>];
+    "ErrorList" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fee2e2"><b>ErrorList</b></td></tr><tr><td align="left" balign="left">errores: list[CompilerError]</td></tr><tr><td align="left" balign="left">+ agregar()<br/>+ hay_errores()</td></tr></table>>];
+    "CompilerError" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fee2e2"><b>CompilerError</b></td></tr><tr><td align="left" balign="left">tipo: str<br/>descripcion: str<br/>linea: int<br/>columna: int</td></tr><tr><td align="left" balign="left">+ to_dict()</td></tr></table>>];
+    "Semantic" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#ede9fe"><b>Semantic</b></td></tr><tr><td align="left" balign="left">errores: ErrorList<br/>tabla: SymbolTable<br/>ciclos: list</td></tr><tr><td align="left" balign="left">+ analizar()<br/>+ error()<br/>+ funcion_embebida()<br/>+ revisar_condicion()<br/>+ revisar_etiqueta_nueva()<br/>+ revisar_salto()<br/>+ valor()<br/>+ visitar()<br/>+ visitar_bloque()<br/>+ visitar_instrucciones()<br/>+ visit_*(nodo)   [25 métodos: uno por nodo]</td></tr></table>>];
+    "SymbolTable" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>SymbolTable</b></td></tr><tr><td align="left" balign="left">global_scope: Scope<br/>actual: Scope<br/>todos: list[Symbol]<br/>funcion_actual: Symbol</td></tr><tr><td align="left" balign="left">+ abrir_scope()<br/>+ buscar()<br/>+ buscar_local()<br/>+ cerrar_scope()<br/>+ declarar_funcion()<br/>+ declarar_variable()<br/>+ entrar_funcion()<br/>+ reporte()<br/>+ salir_funcion()</td></tr></table>>];
+    "Scope" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>Scope</b></td></tr><tr><td align="left" balign="left">nombre: str<br/>padre: Scope<br/>simbolos: dict</td></tr><tr><td align="left" balign="left">+ buscar()<br/>+ buscar_local()</td></tr></table>>];
+    "Symbol" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#dcfce7"><b>Symbol</b></td></tr><tr><td align="left" balign="left">nombre, categoria, tipo<br/>linea, columna, ambito<br/>mutable, valor<br/>offset: int (en la pila)<br/>params, tipos_params, tamano_frame</td></tr><tr><td align="left" balign="left">+ to_dict()<br/>+ valor_reporte()</td></tr></table>>];
+    "Arm64Generator" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#fef3c7"><b>Arm64Generator</b></td></tr><tr><td align="left" balign="left">text, data: list[str]<br/>cadenas, decimales: dict<br/>ciclos: list<br/>rutinas: set</td></tr><tr><td align="left" balign="left">+ aplicar()<br/>+ asignar_elemento()<br/>+ buscar_ciclo()<br/>+ cadena()<br/>+ cargar_inmediato()<br/>+ cargar_variable()<br/>+ comentario()<br/>+ condicion_valida()<br/>+ contiene_en_arreglo()<br/>+ copiar_si_es_variable()<br/>+ cuerpo_brazo()<br/>+ cuerpo_ciclo()<br/>+ decimal()<br/>+ direccion()<br/>+ visit_*(nodo)  [uno por nodo]<br/>+ ...</td></tr></table>>];
+    "Node" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#e0f2fe"><b>Node  (AST)</b></td></tr><tr><td align="left" balign="left">linea, columna</td></tr><tr><td align="left" balign="left">+ hijos()<br/>+ pretty()</td></tr></table>>];
+    "compilador" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#f1f5f9"><b>compilador.py</b></td></tr><tr><td align="left" balign="left">+ compilar(codigo)</td></tr></table>>];
+    "runner" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#f1f5f9"><b>runner.py</b></td></tr><tr><td align="left" balign="left">+ ejecutar_asm(asm)<br/>+ compilador_c()</td></tr></table>>];
+    "reports" [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="5"><tr><td bgcolor="#f1f5f9"><b>reports.py</b></td></tr><tr><td align="left" balign="left">+ html_errores()<br/>+ html_tabla_simbolos()<br/>+ ast_a_dot()<br/>+ dot_a_svg()<br/>+ guardar_reportes()</td></tr></table>>];
+    "compilador" -> "Parser" [label="usa"];
+    "compilador" -> "Semantic" [label="usa"];
+    "compilador" -> "Arm64Generator" [label="usa"];
+    "compilador" -> "runner" [label="usa"];
+    "Parser" -> "Lexer" [label="tiene"];
+    "Parser" -> "Node" [label="crea"];
+    "Lexer" -> "ErrorList" [label="reporta en"];
+    "Parser" -> "ErrorList" [label="reporta en"];
+    "Semantic" -> "ErrorList" [label="reporta en"];
+    "ErrorList" -> "CompilerError" [label="1..*"];
+    "Semantic" -> "SymbolTable" [label="llena"];
+    "SymbolTable" -> "Scope" [label="pila de"];
+    "Scope" -> "Symbol" [label="contiene"];
+    "Semantic" -> "Node" [label="anota"];
+    "Arm64Generator" -> "Node" [label="recorre"];
+    "Arm64Generator" -> "Symbol" [label="lee offset"];
+    "reports" -> "Node" [label="dibuja"];
+    "reports" -> "SymbolTable" [label="lee"];
+}
