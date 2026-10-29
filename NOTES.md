@@ -7,6 +7,7 @@ ACA SE ANOTARAN QUE ARCHIVOS Y QUE NUMEROS DE LINEAS HAY QUE MODIFICAR, SIEMPRE 
 # Cambio: Modificar los arreglos de una dimension para que el indice inicie en 1
 
 ### compiler/semantic.py
+```bash
 587  nodo.desde_uno = False  
 
 
@@ -35,9 +36,11 @@ ACA SE ANOTARAN QUE ARCHIVOS Y QUE NUMEROS DE LINEAS HAY QUE MODIFICAR, SIEMPRE 
 638  if not es_arreglo(elemento(tipo_base)) and not isinstance(nodo.base, ast.Index):
 639      desde, hasta = desde - 1, hasta - 1
 
+```
+
 
 ## compiler/codegen/arm64.py
-
+```bash
 895  self.visitar(nodo.indice)                   # x0 = índice
 896  if nodo.desde_uno:                          # arreglo de una dimensión:
 897      self.emit("sub x0, x0, #1", "índice desde 1: a[1] es la posición 0")
@@ -47,8 +50,9 @@ ACA SE ANOTARAN QUE ARCHIVOS Y QUE NUMEROS DE LINEAS HAY QUE MODIFICAR, SIEMPRE 
 910  self.emit("mov x2, x0")
 911  if nodo.desde_uno:                          # el mensaje muestra el índice que
 912      self.emit("add x2, x2, #1", "escribió el usuario, no la posición")
+```
 
 ## compiler/reports.py
-
+```bash
 912                  'desde_uno'}   # dato interno del índice desde 1, no se dibuja en el AST
-
+```
