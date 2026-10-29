@@ -21,7 +21,7 @@ CARPETA_REPORTES = os.path.join(
 # (se muestran de otra forma o no aportan al reporte).
 ATRIBUTOS_OCULTOS = {'simbolo', 'tipo_resultado', 'usar_defecto', 'omitir', 'partes',
                      'tipo_funcion', 'indice_constante', 'tipo_objeto', 'desde', 'hasta',
-                     'tipo_valor', 'embebida', 'texto_tipo'}
+                     'tipo_valor', 'embebida', 'texto_tipo', 'desde_uno'}
 
 
 # ======================================================================
@@ -240,3 +240,14 @@ def _pagina_html(titulo, cuerpo):
 </body>
 </html>
 """
+
+
+## let numeros: [i32; 3] = [10, 20, 30];
+## println!("Primer número: {}", numeros[2]);
+
+
+'''──────── Salida del programa ────────
+Primer número: 20
+
+
+LISTOOOOOOO '''

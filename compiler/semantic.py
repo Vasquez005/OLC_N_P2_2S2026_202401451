@@ -577,6 +577,7 @@ class Semantic:
         tipo_indice = self.valor(nodo.indice)
         nodo.tipo_resultado = ERROR
         nodo.indice_constante = None
+        nodo.desde_uno = False
         if ERROR in (tipo_base, tipo_indice):
             return ERROR
         if not es_arreglo(tipo_base):
@@ -587,6 +588,13 @@ class Semantic:
                                     f"pero es de tipo {tipo_indice}.")
             return ERROR
         constante = constante_entera(nodo.indice)
+        nodo.desde_uno = (not es_arreglo(elemento(tipo_base))
+                          and not isinstance(nodo.base, ast.Index))
+
+        constante = constante_entera(nodo.indice)
+        if constante is not None:
+            if nodo.desde_uno:
+                constante -= 1
         if constante is not None:
             # En un arreglo dinámico solo se puede descartar un negativo;
             # el máximo se revisa al ejecutar contra el largo guardado.
@@ -617,6 +625,8 @@ class Semantic:
             self.error(nodo, "Los límites de un slice deben ser números enteros constantes.")
             return ERROR
         maximo = longitud(tipo_base) if es_estatico(tipo_base) else hasta
+        if not es_arreglo(elemento(tipo_base) and not isinstance(nodo.base, ast.Index)):
+            desde, hasta = desde - 1, hasta - 1
         if not 0 <= desde <= hasta <= maximo:
             self.error(nodo, "Índice fuera de los límites del arreglo.")
             return ERROR

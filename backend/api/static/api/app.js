@@ -155,6 +155,11 @@ $('btn-abrir').addEventListener('click', () => $('entrada-archivo').click());
 $('entrada-archivo').addEventListener('change', (e) => {
   const archivo = e.target.files[0];
   if (!archivo) return;
+  if (!/\.(rs|ox)$/i.test(archivo.name)) {
+    escribirConsola(`✖ "${archivo.name}" no es un archivo válido. Solo se aceptan archivos .rs u .ox.`, 'error');
+    e.target.value = '';
+    return;
+  }
   if (estado.modificado && !confirm('Hay cambios sin guardar. ¿Abrir otro archivo de todos modos?')) {
     e.target.value = '';
     return;
@@ -171,7 +176,9 @@ $('entrada-archivo').addEventListener('change', (e) => {
 function guardarArchivo() {
   let nombre = prompt('Nombre del archivo:', estado.nombre);
   if (!nombre) return;
-  if (!nombre.includes('.')) nombre += '.rs';
+  nombre = nombre.trim();
+  if (!nombre) return;
+  if (!/\.(rs|ox)$/i.test(nombre)) nombre = nombre.replace(/\.[^./\\]*$/, '') + '.rs';
   const blob = new Blob([editor.value], { type: 'text/plain;charset=utf-8' });
   const enlace = document.createElement('a');
   enlace.href = URL.createObjectURL(blob);

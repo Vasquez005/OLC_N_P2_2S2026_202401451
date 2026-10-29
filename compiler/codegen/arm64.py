@@ -828,6 +828,8 @@ class Arm64Generator:
 
         self.push()                                 # guardar la base
         self.visitar(nodo.indice)                   # x0 = índice
+        if nodo.desde_uno:
+            self.emit("sub x0, x0, #1", "indice desde 1 ")
         ok = self.nueva_etiqueta("indice_ok")
         if es_dinamico(tipo_arr):
             self.emit("ldr x1, [sp]")
@@ -840,6 +842,9 @@ class Arm64Generator:
         self.emit(f"b.lo {ok}", "0 <= índice < largo")
         self.emit("mov x2, x0")
         self.emit("mov x3, x12")
+        self.emit("mov x2, x0")
+        if nodo.desde_uno:
+            self.emit("add x2, x2, #1", "se escribe el usuario, no la pos en el arr.")
         self.cargar_inmediato("x0", nodo.linea)
         self.cargar_inmediato("x1", nodo.columna)
         self.llamar("__oxi_fuera_limites")          # no regresa
