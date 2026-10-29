@@ -1,0 +1,54 @@
+# NOTAS
+
+ACA SE ANOTARAN QUE ARCHIVOS Y QUE NUMEROS DE LINEAS HAY QUE MODIFICAR, SIEMPRE TOMANDO COMO BASE LOS ARCHIVOS EXISTENTES.
+
+### Ejemplo:
+
+# Cambio: Modificar los arreglos de una dimension para que el indice inicie en 1
+
+### compiler/semantic.py
+587  nodo.desde_uno = False  
+
+
+597  # Un arreglo es de UNA dimensión si sus elementos no son arreglos
+598  # ([i32; 5]) y no es la fila de una matriz (la m[i] de m[i][j]).
+599  # Solo en esos arreglos el índice empieza en 1; las matrices siguen en 0.
+600  nodo.desde_uno = (not es_arreglo(elemento(tipo_base))
+601                    and not isinstance(nodo.base, ast.Index))
+
+
+602  constante = constante_entera(nodo.indice)
+603  if constante is not None:
+604      if nodo.desde_uno:
+605          constante -= 1          # a[1] es la posición 0 de la memoria
+606      # Desde aquí `constante` es la posición real (desde 0), así que la
+607      # misma revisión de límites sirve para los dos casos.
+     ...
+611      if constante < 0 or (maximo is not None and constante >= maximo):
+612          self.error(nodo, "Índice fuera de los límites del arreglo.")
+     ...
+614          nodo.indice_constante = constante   # el generador usa la posición real
+
+
+636  # En un arreglo de una dimensión los límites también cuentan desde 1:
+637  # &a[1..3] toma a[1] y a[2], que son las posiciones reales 0..2.
+638  if not es_arreglo(elemento(tipo_base)) and not isinstance(nodo.base, ast.Index):
+639      desde, hasta = desde - 1, hasta - 1
+
+
+## compiler/codegen/arm64.py
+
+895  self.visitar(nodo.indice)                   # x0 = índice
+896  if nodo.desde_uno:                          # arreglo de una dimensión:
+897      self.emit("sub x0, x0, #1", "índice desde 1: a[1] es la posición 0")
+898      # Desde aquí x0 es la posición real, así que la revisión de
+899      # límites de abajo no cambia: a[0] queda en -1 y da error.
+
+910  self.emit("mov x2, x0")
+911  if nodo.desde_uno:                          # el mensaje muestra el índice que
+912      self.emit("add x2, x2, #1", "escribió el usuario, no la posición")
+
+## compiler/reports.py
+
+912                  'desde_uno'}   # dato interno del índice desde 1, no se dibuja en el AST
+
