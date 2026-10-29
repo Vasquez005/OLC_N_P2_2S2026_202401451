@@ -56,3 +56,47 @@ ACA SE ANOTARAN QUE ARCHIVOS Y QUE NUMEROS DE LINEAS HAY QUE MODIFICAR, SIEMPRE 
 ```bash
 912                  'desde_uno'}   # dato interno del índice desde 1, no se dibuja en el AST
 ```
+
+---
+
+# Cambio: Intercambiar precedencia de + con *, y de && con ||
+
+Solo se toca la tabla `precedence` del parser. En PLY, mientras más ABAJO
+está una fila, MÁS precedencia tiene. La tabla decide cómo se arma el AST;
+el semántico y el generador ARM64 solo recorren ese árbol, así que no se
+cambia nada más.
+
+### compiler/parser.py
+```bash
+# ANTES (líneas 77-81)
+77          ('left', 'OR'),
+78          ('left', 'AND'),
+79          ('nonassoc', 'EQ', 'NE', 'LT', 'GT', 'LE', 'GE'),
+80          ('left', 'PLUS', 'MINUS'),
+81          ('left', 'TIMES', 'DIVIDE', 'MOD'),
+
+# DESPUÉS (mismas líneas: solo se intercambian OR<->AND y PLUS<->TIMES)
+77          ('left', 'AND'),                    # && ahora es el más débil (antes era ||)
+78          ('left', 'OR'),                     # || ahora pesa más que && (antes era al revés)
+79          ('nonassoc', 'EQ', 'NE', 'LT', 'GT', 'LE', 'GE'),
+80          ('left', 'TIMES', 'MINUS'),         # * bajó al nivel donde estaba +
+81          ('left', 'PLUS', 'DIVIDE', 'MOD'),  # + subió al nivel donde estaba *
+```
+
+### Prueba: tests/09_precedencia.rs
+| Expresión                  | Antes | Ahora                          |
+|----------------------------|-------|--------------------------------|
+| `2 + 3 * 4`                | 14    | 20 → `(2+3)*4`                 |
+| `2 * 3 + 4`                | 10    | 14 → `2*(3+4)`                 |
+| `10 - 2 + 3`               | 11    | 5  → `10-(2+3)`                |
+| `8 / 2 * 3`                | 12    | 12 (sin cambio)                |
+| `true \|\| false && false` | true  | false → `(true\|\|false)&&false` |
+| `false && true \|\| true`  | true  | false → `false&&(true\|\|true)`  |
+
+Salida esperada: `20 14 5 12 false false`
+
+### Nota para explicarlo
+- Se tomó literal: solo `+` y `*` cambian de lugar; `-`, `/` y `%` se quedan.
+- Si piden intercambiar los GRUPOS completos, las líneas 80-81 serían:
+  `('left', 'TIMES', 'DIVIDE', 'MOD'),` y luego `('left', 'PLUS', 'MINUS'),`
+- No hay tablas guardadas que borrar: el parser usa `write_tables=False`.

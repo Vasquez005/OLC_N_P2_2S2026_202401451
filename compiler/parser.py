@@ -74,11 +74,11 @@ class Parser:
     # menos unario (-x) tenga más prioridad que la resta (a - b).
     # ------------------------------------------------------------------
     precedence = (
-        ('left', 'OR'),
-        ('left', 'AND'),
+        ('left', 'AND'),                    # && ahora es el más débil (antes era ||)
+        ('left', 'OR'),                     # || ahora pesa más que && (antes era al revés)
         ('nonassoc', 'EQ', 'NE', 'LT', 'GT', 'LE', 'GE'),
-        ('left', 'PLUS', 'MINUS'),
-        ('left', 'TIMES', 'DIVIDE', 'MOD'),
+        ('left', 'TIMES', 'MINUS'),         # * bajó al nivel donde estaba +
+        ('left', 'PLUS', 'DIVIDE', 'MOD'),  # + subió al nivel donde estaba *
         ('right', 'NOT', 'UMINUS'),
     )
 
